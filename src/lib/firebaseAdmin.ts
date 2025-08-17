@@ -48,7 +48,7 @@ export function getAdminMessaging() {
 
 export const adminFieldValue = admin.firestore.FieldValue;
 
-/** 과거 코드 호환용: 값으로도 내보내기 */
+/** 과거 import 호환용: 값으로도 export */
 export const adminDb = getAdminDb();
 export const adminAuth = getAdminAuth();
 export const adminMessaging = getAdminMessaging();
