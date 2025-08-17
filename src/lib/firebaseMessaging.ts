@@ -1,33 +1,48 @@
-'use client';
-
+// src/lib/firebaseMessaging.ts
+import {
+  isSupported,
+  getMessaging,
+  getToken,
+  onMessage,
+  type Messaging,
+  type MessagePayload,
+} from 'firebase/messaging';
 import { firebaseApp } from '@/lib/firebase';
-import { getMessaging, getToken, onMessage, isSupported, Messaging } from 'firebase/messaging';
 
-let _messaging: Messaging | null = null;
-
-export async function getMessagingSafe() {
-  const ok = await isSupported().catch(() => false);
-  if (!ok) return null;
-  if (_messaging) return _messaging;
-  _messaging = getMessaging(firebaseApp);
-  return _messaging;
+/** 지원 브라우저면 Messaging 인스턴스 반환 */
+export async function getMessagingIfSupported(): Promise<Messaging | null> {
+  try {
+    const ok = await isSupported();
+    if (!ok) return null;
+    return getMessaging(firebaseApp);
+  } catch {
+    return null;
+  }
 }
 
+/** 권한 요청 → FCM 토큰 발급 */
 export async function requestAndGetFcmToken(): Promise<string | null> {
-  const messaging = await getMessagingSafe();
+  const messaging = await getMessagingIfSupported();
   if (!messaging) return null;
 
-  // 알림 권한 요청
-  const perm = await Notification.requestPermission();
-  if (perm !== 'granted') return null;
-
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY!;
-  const token = await getToken(messaging, { vapidKey }).catch(() => null);
-  return token ?? null;
+  try {
+    const token = await getToken(messaging, {
+      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+      serviceWorkerRegistration: await navigator.serviceWorker.ready,
+    });
+    return token || null;
+  } catch (e: unknown) {
+    console.warn('getToken error', e);
+    return null;
+  }
 }
 
-export async function listenForeground(handler: (payload: any)=>void) {
-  const messaging = await getMessagingSafe();
-  if (!messaging) return () => {};
-  return onMessage(messaging, handler);
+/** 포그라운드 수신 콜백 등록 */
+export async function subscribeOnMessage(cb: (payload: MessagePayload) => void): Promise<void> {
+  const messaging = await getMessagingIfSupported();
+  if (!messaging) return;
+  onMessage(messaging, cb);
 }
+
+/** 과거 코드 호환용 별칭 */
+export const listenForeground = subscribeOnMessage;
