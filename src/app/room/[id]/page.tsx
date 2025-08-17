@@ -1,7 +1,6 @@
+// src/app/room/[id]/page.tsx
 // Server Component
 import { notFound } from 'next/navigation';
-import { headers } from 'next/headers';
-import ClientButtons from './ClientButtons';
 
 type Room = {
   id: string;
@@ -20,31 +19,43 @@ type Room = {
 };
 
 async function fetchRoomOnServer(id: string): Promise<Room | null> {
-  // 절대 URL 생성(개발/배포 모두 안정)
-  const h = headers();
-  const host = h.get('host')!;
-  const proto = process.env.NODE_ENV === 'development' ? 'http' : 'https';
-  const url = `${proto}://${host}/api/rooms/get?id=${encodeURIComponent(id)}`;
-
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(`/api/rooms/get?id=${encodeURIComponent(id)}`, {
+    cache: 'no-store',
+    // next: { revalidate: 0 } // 원하면 명시
+  });
   if (!res.ok) {
     if (res.status === 404) return null;
-    let body: any = {};
-    try { body = await res.json(); } catch {}
+    let body: unknown = {};
+    try {
+      body = await res.json();
+    } catch {}
     throw new Error(`detail fetch failed: ${res.status} ${JSON.stringify(body)}`);
   }
   const j = await res.json();
   return j.room as Room;
 }
 
-export default async function RoomDetailPage({ params }: { params: { id: string } }) {
-  const room = await fetchRoomOnServer(params.id);
+export default async function RoomDetailPage({
+  params,
+}: {
+  // ✅ Next 15: params는 Promise
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const room = await fetchRoomOnServer(id);
   if (!room) notFound();
 
   const human = (iso?: string) => {
     if (!iso) return '-';
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
   };
+
+  // ClientButtons는 그대로 사용하세요 (파일 위치: src/app/room/[id]/ClientButtons.tsx)
+  const ClientButtons = (await import('./ClientButtons')).default;
 
   return (
     <main style={{ padding: 24, maxWidth: 800, margin: '0 auto' }}>
@@ -62,11 +73,20 @@ export default async function RoomDetailPage({ params }: { params: { id: string 
             </a>
           </>
         ) : null}
-        {room.type ? <><br/>종류: {room.type}</> : null}
-        {room.content ? <><br/>내용: {room.content}</> : null}
+        {room.type ? (
+          <>
+            <br />
+            종류: {room.type}
+          </>
+        ) : null}
+        {room.content ? (
+          <>
+            <br />
+            내용: {room.content}
+          </>
+        ) : null}
       </div>
 
-      {/* 클라이언트 컴포넌트로 분리 */}
       <ClientButtons
         roomId={room.id}
         closed={!!room.closed}
