@@ -1,60 +1,39 @@
 // src/lib/firebaseMessaging.ts
-// 클라이언트에서만 실행되게 가드
-import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
+'use client';
+
+import { firebaseApp } from './firebase';
 import {
   getMessaging,
   isSupported,
   getToken,
   onMessage,
-  type Messaging,
   type MessagePayload,
 } from 'firebase/messaging';
 
-let app: FirebaseApp | null = null;
-if (typeof window !== 'undefined') {
-  const apps = getApps();
-  app =
-    apps[0] ??
-    initializeApp({
-      apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
-      authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN!,
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID!,
-      messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID!,
-      appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
-    });
-}
-
-let messagingPromise: Promise<Messaging | null> | null = null;
-function ensureMessaging(): Promise<Messaging | null> {
-  if (typeof window === 'undefined') return Promise.resolve(null);
-  if (!messagingPromise) {
-    messagingPromise = isSupported().then((ok) => (ok && app ? getMessaging(app) : null));
-  }
-  return messagingPromise;
-}
-
-// FCM 토큰 요청
-export async function requestFcmToken(): Promise<string | null> {
+/** 브라우저 권한 요청 + FCM 토큰 발급 */
+export async function requestAndGetFcmToken(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
-  const m = await ensureMessaging();
-  if (!m) return null;
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY!;
-  try {
-    const token = await getToken(m, { vapidKey });
-    return token ?? null;
-  } catch {
-    return null;
+
+  const supported = await isSupported().catch(() => false);
+  if (!supported) return null;
+
+  if (Notification?.permission !== 'granted') {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') return null;
   }
+
+  const messaging = getMessaging(firebaseApp);
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY; // 반드시 설정 권장
+  const token = await getToken(messaging, { vapidKey: vapidKey ?? undefined });
+  return token ?? null;
 }
 
-// 포그라운드 수신 리스너
-export function listenForeground(cb: (payload: MessagePayload) => void): () => void {
-  if (typeof window === 'undefined') return () => {};
-  let unsub = () => {};
-  void ensureMessaging().then((m) => {
-    if (m) {
-      unsub = onMessage(m, cb);
-    }
-  });
-  return () => unsub();
+/** 포그라운드 메시지 수신 리스너 */
+export async function listenForeground(handler: (payload: MessagePayload) => void) {
+  if (typeof window === 'undefined') return;
+  const supported = await isSupported().catch(() => false);
+  if (!supported) return;
+
+  const messaging = getMessaging(firebaseApp);
+  onMessage(messaging, handler);
 }
