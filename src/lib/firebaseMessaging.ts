@@ -1,48 +1,60 @@
 // src/lib/firebaseMessaging.ts
+// 클라이언트에서만 실행되게 가드
+import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import {
-  isSupported,
   getMessaging,
+  isSupported,
   getToken,
   onMessage,
   type Messaging,
   type MessagePayload,
 } from 'firebase/messaging';
-import { firebaseApp } from '@/lib/firebase';
 
-/** 지원 브라우저면 Messaging 인스턴스 반환 */
-export async function getMessagingIfSupported(): Promise<Messaging | null> {
+let app: FirebaseApp | null = null;
+if (typeof window !== 'undefined') {
+  const apps = getApps();
+  app =
+    apps[0] ??
+    initializeApp({
+      apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
+      authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN!,
+      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID!,
+      messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID!,
+      appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID!,
+    });
+}
+
+let messagingPromise: Promise<Messaging | null> | null = null;
+function ensureMessaging(): Promise<Messaging | null> {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (!messagingPromise) {
+    messagingPromise = isSupported().then((ok) => (ok && app ? getMessaging(app) : null));
+  }
+  return messagingPromise;
+}
+
+// FCM 토큰 요청
+export async function requestFcmToken(): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  const m = await ensureMessaging();
+  if (!m) return null;
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY!;
   try {
-    const ok = await isSupported();
-    if (!ok) return null;
-    return getMessaging(firebaseApp);
+    const token = await getToken(m, { vapidKey });
+    return token ?? null;
   } catch {
     return null;
   }
 }
 
-/** 권한 요청 → FCM 토큰 발급 */
-export async function requestAndGetFcmToken(): Promise<string | null> {
-  const messaging = await getMessagingIfSupported();
-  if (!messaging) return null;
-
-  try {
-    const token = await getToken(messaging, {
-      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: await navigator.serviceWorker.ready,
-    });
-    return token || null;
-  } catch (e: unknown) {
-    console.warn('getToken error', e);
-    return null;
-  }
+// 포그라운드 수신 리스너
+export function listenForeground(cb: (payload: MessagePayload) => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  let unsub = () => {};
+  void ensureMessaging().then((m) => {
+    if (m) {
+      unsub = onMessage(m, cb);
+    }
+  });
+  return () => unsub();
 }
-
-/** 포그라운드 수신 콜백 등록 */
-export async function subscribeOnMessage(cb: (payload: MessagePayload) => void): Promise<void> {
-  const messaging = await getMessagingIfSupported();
-  if (!messaging) return;
-  onMessage(messaging, cb);
-}
-
-/** 과거 코드 호환용 별칭 */
-export const listenForeground = subscribeOnMessage;

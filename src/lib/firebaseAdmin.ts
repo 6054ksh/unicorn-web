@@ -1,54 +1,36 @@
 // src/lib/firebaseAdmin.ts
-import * as admin from 'firebase-admin';
+import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 
-declare global {
-  // HMR/재빌드 시 중복 초기화 방지
-  // eslint-disable-next-line no-var
-  var __FIREBASE_ADMIN_APP__: admin.app.App | undefined;
+// Vercel 환경변수에 아래 값들이 존재해야 함
+// FIREBASE_ADMIN_PROJECT_ID
+// FIREBASE_ADMIN_CLIENT_EMAIL
+// FIREBASE_ADMIN_PRIVATE_KEY  (줄바꿈이 \n 로 들어있는 경우가 많아 replace 처리)
+
+function initAdminApp(): App {
+  const apps = getApps();
+  if (apps.length) return apps[0];
+
+  const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID!;
+  const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL!;
+  // Vercel에 저장 시 \n 로 들어간 경우 실제 개행으로 변환
+  const privateKey = (process.env.FIREBASE_ADMIN_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+
+  return initializeApp({
+    credential: cert({
+      projectId,
+      clientEmail,
+      privateKey,
+    }),
+  });
 }
 
-function initAdminApp(): admin.app.App {
-  if (globalThis.__FIREBASE_ADMIN_APP__) return globalThis.__FIREBASE_ADMIN_APP__;
+const app = initAdminApp();
 
-  const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, '\n');
-
-  if (!projectId || !clientEmail || !privateKey) {
-    throw new Error('Missing FIREBASE_ADMIN_* env');
-  }
-
-  const app =
-    admin.apps.length > 0
-      ? admin.app()
-      : admin.initializeApp({
-          credential: admin.credential.cert({
-            projectId,
-            clientEmail,
-            privateKey,
-          }),
-        });
-
-  globalThis.__FIREBASE_ADMIN_APP__ = app;
-  return app;
-}
-
-export function getAdminApp() {
-  return initAdminApp();
-}
-export function getAdminDb() {
-  return admin.firestore(getAdminApp());
-}
-export function getAdminAuth() {
-  return admin.auth(getAdminApp());
-}
-export function getAdminMessaging() {
-  return admin.messaging(getAdminApp());
-}
-
-export const adminFieldValue = admin.firestore.FieldValue;
-
-/** 과거 import 호환용: 값으로도 export */
-export const adminDb = getAdminDb();
-export const adminAuth = getAdminAuth();
-export const adminMessaging = getAdminMessaging();
+export const adminApp = app;
+export const adminAuth = getAuth(app);
+export const adminDb = getFirestore(app);
+export const adminFieldValue = FieldValue;
+export const adminMessaging = getMessaging(app);
