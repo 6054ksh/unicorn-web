@@ -65,6 +65,7 @@ function CallbackInner() {
 
         // 1) 인가코드 → access_token
         setMessage('카카오 토큰 교환 중...');
+        const redirectUri = `${window.location.origin}/login/callback`; // ✅ 추가
         const res = await fetch(
           `/api/auth/kakao-exchange?code=${encodeURIComponent(code)}`,
           { method: 'GET', cache: 'no-store', credentials: 'same-origin' }

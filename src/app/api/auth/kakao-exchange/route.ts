@@ -13,14 +13,20 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'code is required' }, { status: 400 });
     }
 
+    // ✅ 콜백 페이지에서 넘겨주면 우선 사용, 없으면 env fallback
+    const redirectUri =
+      searchParams.get('redirect_uri') || process.env.KAKAO_REDIRECT_URI!;
+    if (!redirectUri) {
+      return NextResponse.json({ error: 'redirect_uri missing' }, { status: 400 });
+    }
+
     const clientId = process.env.KAKAO_REST_API_KEY!;
-    const redirectUri = process.env.KAKAO_REDIRECT_URI!; // prod 도메인으로 설정 필수
     const clientSecret = process.env.KAKAO_CLIENT_SECRET;
 
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
-      redirect_uri: redirectUri,
+      redirect_uri: redirectUri,  // ✅ 반드시 인가 요청 때와 동일
       code,
     });
     if (clientSecret) body.set('client_secret', clientSecret);
@@ -38,8 +44,6 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
-
-    // access_token, refresh_token, token_type, expires_in, scope ...
     return NextResponse.json(json);
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? String(e) }, { status: 500 });
