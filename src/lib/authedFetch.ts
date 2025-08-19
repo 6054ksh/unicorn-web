@@ -1,35 +1,70 @@
+// src/lib/authedFetch.ts
 'use client';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
+
+import { getAuth, onAuthStateChanged, onIdTokenChanged } from 'firebase/auth';
 import { firebaseApp } from '@/lib/firebase';
 
 async function waitForIdToken(timeoutMs = 5000): Promise<string | null> {
   const auth = getAuth(firebaseApp);
 
-  // 이미 로그인 객체가 있으면 바로 토큰
+  // 이미 로그인돼 있으면 즉시 시도
   if (auth.currentUser) {
-    return await auth.currentUser.getIdToken();
+    try {
+      return await auth.currentUser.getIdToken();
+    } catch {
+      // 아래 이벤트 대기 로직으로 폴백
+    }
   }
 
-  // 아직이면 onAuthStateChanged 한 번 기다림
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      unsub();
-      resolve(null); // 타임아웃 시 null
-    }, timeoutMs);
+    let settled = false;
 
-    const unsub = onAuthStateChanged(auth, async (user) => {
+    const done = (val: string | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      unsub();
-      if (!user) return resolve(null);
-      resolve(await user.getIdToken());
+      unsubAuth();
+      unsubToken();
+      resolve(val);
+    };
+
+    const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      if (!user) return done(null);
+      try {
+        const t = await user.getIdToken();
+        done(t);
+      } catch {
+        done(null);
+      }
     });
+
+    // 토큰 리프레시/초기 발급을 더 빨리 잡기 위한 보조 리스너
+    const unsubToken = onIdTokenChanged(auth, async (user) => {
+      if (!user) return; // 로그아웃 이벤트는 무시
+      try {
+        const t = await user.getIdToken();
+        done(t);
+      } catch {
+        done(null);
+      }
+    });
+
+    const timer = setTimeout(() => done(null), timeoutMs);
   });
 }
 
 export async function authedFetch(input: string, init: RequestInit = {}) {
-  const token = await waitForIdToken(); // ✅ 토큰 준비될 때까지 대기
+  const token = await waitForIdToken();
   const headers = new Headers(init.headers || {});
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  headers.set('Content-Type', 'application/json');
-  return fetch(input, { ...init, headers });
+  // body가 있을 때만 Content-Type 지정 (GET에 강제 지정 방지)
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  return fetch(input, {
+    ...init,
+    headers,
+    credentials: init.credentials ?? 'same-origin',
+    cache: init.cache ?? 'no-store',
+  });
 }

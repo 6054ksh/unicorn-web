@@ -1,4 +1,7 @@
+// src/app/api/auth/kakao-custom/route.ts
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 import { NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebaseAdmin';
@@ -14,6 +17,7 @@ export async function POST(req: Request) {
     // 1) 카카오 사용자 정보 조회
     const meResp = await fetch('https://kapi.kakao.com/v2/user/me', {
       headers: { Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
     });
     const me = await meResp.json();
     if (!meResp.ok || !me?.id) {
@@ -23,7 +27,6 @@ export async function POST(req: Request) {
     const kakaoId = String(me.id);
     const uid = `kakao:${kakaoId}`;
 
-    // 동의된 항목만 값이 옵니다. (미동의면 빈 값일 수 있음)
     const nickname =
       me?.kakao_account?.profile?.nickname ??
       me?.properties?.nickname ??
@@ -34,26 +37,23 @@ export async function POST(req: Request) {
       me?.properties?.profile_image ??
       '';
 
-    // 2) 커스텀 토큰 발급
+    // 2) Firebase 커스텀 토큰 발급
     const customToken = await adminAuth.createCustomToken(uid, {
       provider: 'kakao',
       name: nickname || '',
       profileImage: profileImage || '',
     });
 
-    // 3) users/{uid} upsert (기존 name이 있으면 보존)
+    // 3) Firestore upsert
     const userRef = adminDb.collection('users').doc(uid);
     await adminDb.runTransaction(async (tx) => {
       const snap = await tx.get(userRef);
       const prev = snap.exists ? (snap.data() as any) : {};
 
       const finalName =
-        prev?.name && String(prev.name).trim()
-          ? prev.name
-          : nickname;
+        prev?.name && String(prev.name).trim() ? prev.name : nickname;
 
-      const finalProfile =
-        profileImage || prev?.profileImage || '';
+      const finalProfile = profileImage || prev?.profileImage || '';
 
       tx.set(
         userRef,

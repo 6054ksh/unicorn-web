@@ -1,48 +1,54 @@
 // src/lib/firebaseAdmin.ts
-import * as admin from 'firebase-admin';
-import { getAuth as _getAuth } from 'firebase-admin/auth';
-import { getFirestore as _getFirestore } from 'firebase-admin/firestore';
-import { getMessaging as _getMessaging } from 'firebase-admin/messaging';
+import { getApps, initializeApp, cert, App } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 
-let adminApp: admin.app.App | null = null;
+let _app: App | null = null;
 
-function getAdminApp() {
-  if (adminApp) return adminApp;
-  if (admin.apps.length) {
-    adminApp = admin.app();
-    return adminApp;
+function readEnv(keyA: string, keyB?: string) {
+  return process.env[keyA] ?? (keyB ? process.env[keyB] : undefined);
+}
+
+export function getAdminApp(): App {
+  if (_app) return _app;
+  if (getApps().length) {
+    _app = getApps()[0]!;
+    return _app;
   }
 
-  const projectId = process.env.FIREBASE_ADMIN_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  // BOTH supported (ADMIN_* 우선, 없으면 일반 키 사용)
+  const projectId =
+    readEnv('FIREBASE_ADMIN_PROJECT_ID', 'FIREBASE_PROJECT_ID')!;
+  const clientEmail =
+    readEnv('FIREBASE_ADMIN_CLIENT_EMAIL', 'FIREBASE_CLIENT_EMAIL')!;
+  const privateKeyRaw =
+    readEnv('FIREBASE_ADMIN_PRIVATE_KEY', 'FIREBASE_PRIVATE_KEY')!;
 
-  if (!projectId || !clientEmail || !privateKey) {
-    throw new Error('Missing FIREBASE_ADMIN_* env');
-  }
+  const privateKey = privateKeyRaw.replace(/\\n/g, '\n');
 
-  adminApp = admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId,
-      clientEmail,
-      privateKey,
-    }),
+  _app = initializeApp({
+    credential: cert({ projectId, clientEmail, privateKey }),
     projectId,
   });
-  return adminApp;
+
+  return _app;
 }
 
+export const adminApp = getAdminApp();
+export const adminAuth = getAuth(adminApp);
+export const adminDb = getFirestore(adminApp);
+export const adminMessaging = getMessaging(adminApp);
+
+// get* API도 그대로 내보냄 (원 코드 호환)
 export function getAdminAuth() {
-  return _getAuth(getAdminApp());
+  return adminAuth;
 }
-
 export function getAdminDb() {
-  return _getFirestore(getAdminApp());
+  return adminDb;
 }
-
 export function getAdminMessaging() {
-  return _getMessaging(getAdminApp());
+  return adminMessaging;
 }
 
-// (원하면) 기본 내보내기
-export default { getAdminApp, getAdminAuth, getAdminDb, getAdminMessaging };
+export default { getAdminApp, getAdminAuth, getAdminDb, getAdminMessaging, adminAuth, adminDb, adminMessaging };
