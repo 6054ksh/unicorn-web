@@ -1,4 +1,3 @@
-// src/app/api/auth/kakao-exchange/route.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -13,12 +12,11 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'code is required' }, { status: 400 });
     }
 
-    // ✅ 콜백 페이지에서 넘겨주면 우선 사용, 없으면 env fallback
+    // 콜백에서 받은 redirect_uri 우선, 없으면 env 폴백
     const redirectUri =
-      searchParams.get('redirect_uri') || process.env.KAKAO_REDIRECT_URI!;
-    if (!redirectUri) {
-      return NextResponse.json({ error: 'redirect_uri missing' }, { status: 400 });
-    }
+      searchParams.get('redirect_uri') ||
+      process.env.KAKAO_REDIRECT_URI ||
+      'https://unicorn-web-git-main-6054kshs-projects.vercel.app/login/callback';
 
     const clientId = process.env.KAKAO_REST_API_KEY!;
     const clientSecret = process.env.KAKAO_CLIENT_SECRET;
@@ -26,7 +24,7 @@ export async function GET(req: Request) {
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId,
-      redirect_uri: redirectUri,  // ✅ 반드시 인가 요청 때와 동일
+      redirect_uri: redirectUri,
       code,
     });
     if (clientSecret) body.set('client_secret', clientSecret);
@@ -44,6 +42,7 @@ export async function GET(req: Request) {
         { status: 400 }
       );
     }
+
     return NextResponse.json(json);
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? String(e) }, { status: 500 });

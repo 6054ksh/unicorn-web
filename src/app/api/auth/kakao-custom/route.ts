@@ -1,4 +1,3 @@
-// src/app/api/auth/kakao-custom/route.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -6,7 +5,6 @@ export const revalidate = 0;
 import { NextResponse } from 'next/server';
 import { adminAuth, adminDb } from '@/lib/firebaseAdmin';
 
-// 클라이언트 콜백(page.tsx 등)에서 accessToken을 보내면 이 라우트가 커스텀 토큰 발급
 export async function POST(req: Request) {
   try {
     const { accessToken } = await req.json();
@@ -14,7 +12,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'accessToken required' }, { status: 400 });
     }
 
-    // 1) 카카오 사용자 정보 조회
     const meResp = await fetch('https://kapi.kakao.com/v2/user/me', {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: 'no-store',
@@ -37,14 +34,12 @@ export async function POST(req: Request) {
       me?.properties?.profile_image ??
       '';
 
-    // 2) Firebase 커스텀 토큰 발급
     const customToken = await adminAuth.createCustomToken(uid, {
       provider: 'kakao',
       name: nickname || '',
       profileImage: profileImage || '',
     });
 
-    // 3) Firestore upsert
     const userRef = adminDb.collection('users').doc(uid);
     await adminDb.runTransaction(async (tx) => {
       const snap = await tx.get(userRef);
@@ -52,7 +47,6 @@ export async function POST(req: Request) {
 
       const finalName =
         prev?.name && String(prev.name).trim() ? prev.name : nickname;
-
       const finalProfile = profileImage || prev?.profileImage || '';
 
       tx.set(
