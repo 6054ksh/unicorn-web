@@ -1,33 +1,40 @@
-import { isSupported, getMessaging, getToken, onMessage, Messaging } from 'firebase/messaging';
-import { firebaseApp } from '@/lib/firebase';
+// src/lib/fcm.ts
+'use client';
 
-export async function getMessagingIfSupported(): Promise<Messaging | null> {
-  try {
-    const ok = await isSupported();
-    if (!ok) return null;
-    return getMessaging(firebaseApp);
-  } catch {
-    return null;
-  }
-}
+import { firebaseApp } from '@/lib/firebase';
+import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
 
 export async function requestAndGetFcmToken(): Promise<string | null> {
-  const messaging = await getMessagingIfSupported();
-  if (!messaging) return null;
+  if (typeof window === 'undefined') return null;
+  if (!(await isSupported())) return null;
+
+  // 서비스워커 등록
+  const reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
+
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
+  if (!vapidKey) {
+    console.warn('Missing NEXT_PUBLIC_FIREBASE_VAPID_KEY');
+    return null;
+  }
+
   try {
+    const messaging = getMessaging(firebaseApp);
     const token = await getToken(messaging, {
-      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
-      serviceWorkerRegistration: await navigator.serviceWorker.ready,
+      vapidKey,
+      serviceWorkerRegistration: reg,
     });
     return token || null;
   } catch (e) {
-    console.warn('getToken error', e);
+    console.error('getToken failed:', e);
     return null;
   }
 }
 
-export async function subscribeOnMessage(cb: (p: any) => void) {
-  const messaging = await getMessagingIfSupported();
-  if (!messaging) return;
-  onMessage(messaging, cb);
+export function subscribeOnMessage(cb: (payload: any) => void) {
+  if (typeof window === 'undefined') return;
+  isSupported().then((ok) => {
+    if (!ok) return;
+    const messaging = getMessaging(firebaseApp);
+    onMessage(messaging, cb);
+  });
 }
