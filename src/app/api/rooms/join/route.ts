@@ -1,22 +1,14 @@
-// src/app/api/rooms/join/route.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
-import { FieldValue } from 'firebase-admin/firestore';
 
 function httpError(message: string, status = 400) {
   const e: any = new Error(message);
   e.status = status;
   return e;
-}
-function toDate(v: any): Date | null {
-  if (!v) return null;
-  if (v instanceof Date) return v;
-  if (v?.toDate) return v.toDate();
-  try { return new Date(v); } catch { return null; }
 }
 
 export async function POST(req: Request) {
@@ -24,19 +16,23 @@ export async function POST(req: Request) {
     const auth = getAdminAuth();
     const db = getAdminDb();
 
+    // 인증 토큰
     const authHeader = req.headers.get('authorization') || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    const decoded = await auth.verifyIdToken(idToken);
-    const uid = decoded.uid;
+    const { uid } = await auth.verifyIdToken(idToken);
 
-    const body = await req.json().catch(() => ({}));
+    // 요청 본문
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      throw httpError('invalid-json', 400);
+    }
     const roomId = body?.roomId;
     if (!roomId) throw httpError('roomId required', 400);
 
     const roomRef = db.collection('rooms').doc(roomId);
-    const userRef = db.collection('users').doc(uid);
-    const scoreRef = db.collection('scores').doc(uid);
 
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(roomRef);
@@ -44,18 +40,24 @@ export async function POST(req: Request) {
 
       const data = snap.data() as any;
       const now = new Date();
-      const endAt = toDate(data?.endAt);
 
+      // 종료/만료 체크
       if (data?.closed === true) throw httpError('room-closed', 400);
-      if (endAt && now >= endAt) throw httpError('room-ended', 400);
+      if (data?.endAt && now >= new Date(data.endAt)) throw httpError('room-ended', 400);
 
+      // ✅ 10분 잠금 제거됨 (joinLockUntil 무시)
+
+      // 중복 참여 방지
       const participants: string[] = Array.isArray(data?.participants) ? data.participants : [];
-      if (participants.includes(uid)) return; // 멱등
+      if (participants.includes(uid)) {
+        // 이미 참여 중이면 멱등 성공
+        return;
+      }
 
+      // 정원 확인
       const cap = typeof data?.capacity === 'number' ? data.capacity : undefined;
       if (cap && participants.length >= cap) throw httpError('room-full', 409);
 
-      // append
       participants.push(uid);
 
       tx.update(roomRef, {
@@ -63,23 +65,6 @@ export async function POST(req: Request) {
         participantsCount: participants.length,
         updatedAt: now.toISOString(),
       });
-
-      // 점수 +5, joinedRooms +1
-      tx.set(scoreRef, {
-        uid,
-        total: FieldValue.increment(5),
-        joinedRooms: FieldValue.increment(1),
-        lastUpdatedAt: now.toISOString(),
-      }, { merge: true });
-
-      // 유저 기본 프로필 업데이트(있을 때만 merge)
-      const name = decoded.name || '';
-      const picture = decoded.picture || '';
-      if (name || picture) {
-        tx.set(userRef, {
-          uid, name, profileImage: picture, updatedAt: now.toISOString(),
-        }, { merge: true });
-      }
     });
 
     return NextResponse.json({ ok: true });
