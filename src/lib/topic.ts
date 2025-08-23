@@ -1,6 +1,6 @@
-// src/lib/topic.ts
 export function topicForRoom(roomId: string) {
-  // 토픽 허용 문자: [A-Za-z0-9-_.~%]
-  // URL 인코딩해서 안전하게 사용
   return 'room_' + encodeURIComponent(roomId);
 }
+
+// 전체 사용자 대상 “방 생성 공지” 토픽
+export const TOPIC_ALL_ROOMS = 'rooms_all';

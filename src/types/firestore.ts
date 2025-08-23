@@ -1,5 +1,4 @@
-// src/types/firestore.ts
-export type ISODateString = string; // ex) "2025-08-25T03:00:00.000Z"
+export type ISODateString = string;
 
 export interface UserDoc {
   uid: string;
@@ -7,37 +6,30 @@ export interface UserDoc {
   name: string;
   nameLower?: string;
   profileImage?: string;
-  tempTitles?: string[];     // 임시 칭호 (다음 참여 전까지)
-  fcmTokens?: string[];      // 웹푸시 토큰들
+  tempTitles?: string[];
+  fcmTokens?: string[];
   lastKakaoSyncAt?: ISODateString;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
 
-export interface AdminDoc {
-  isAdmin: boolean;
-}
+export interface AdminDoc { isAdmin: boolean; }
 
 export interface RoomDoc {
   title: string;
   titleLower: string;
   type?: string;
   content?: string;
-
   location: string;
   capacity: number;
-
   startAt: ISODateString;
-  endAt: ISODateString;      // 기본: startAt + 5h (서버에서 자동세팅 권장)
-  revealAt: ISODateString;   // 기본: startAt - 1h
-
+  endAt: ISODateString;     // 기본: startAt + 5h
+  revealAt: ISODateString;  // 기본: startAt - 1h
   kakaoOpenChatUrl?: string | null;
   creatorUid: string;
-
-  participants: string[];    // uid[]
-  participantsCount: number; // 파생 캐시
+  participants: string[];
+  participantsCount: number;
   closed: boolean;
-
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
@@ -49,7 +41,6 @@ export interface ScoreDoc {
   lastUpdatedAt?: ISODateString;
 }
 
-// ---- 컬렉션 경로 상수 ----
 export const COL = {
   users: 'users',
   admins: 'admins',
@@ -57,7 +48,6 @@ export const COL = {
   scores: 'scores',
 } as const;
 
-// ---- 유틸: 상태 계산 ----
 export type RoomState = 'preparing' | 'ongoing' | 'ended' | 'closed';
 
 export function getRoomState(room: Pick<RoomDoc, 'startAt'|'endAt'|'closed'>): RoomState {
@@ -71,7 +61,6 @@ export function getRoomState(room: Pick<RoomDoc, 'startAt'|'endAt'|'closed'>): R
   return 'ongoing';
 }
 
-// ---- 유틸: 안전 날짜 ----
 export function toDateSafe(iso?: string): Date | null {
   if (!iso) return null;
   const d = new Date(iso);

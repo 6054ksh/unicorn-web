@@ -1,13 +1,9 @@
-// src/app/api/rooms/join/route.ts
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
 import { topicForRoom } from '@/lib/topic';
+import * as admin from 'firebase-admin';
 
-function httpError(message: string, status = 400) {
-  const e: any = new Error(message);
-  e.status = status;
-  return e;
-}
+function httpError(message: string, status = 400) { const e: any = new Error(message); e.status = status; return e; }
 
 export async function POST(req: Request) {
   try {
@@ -26,6 +22,7 @@ export async function POST(req: Request) {
 
     const roomRef = db.collection('rooms').doc(roomId);
 
+    let joined = false;
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(roomRef);
       if (!snap.exists) throw httpError('room-not-found', 404);
@@ -36,12 +33,12 @@ export async function POST(req: Request) {
       if (data?.endAt && now >= new Date(data.endAt)) throw httpError('room-ended', 400);
 
       const participants: string[] = Array.isArray(data?.participants) ? data.participants : [];
-      if (participants.includes(uid)) return;
-
+      if (participants.includes(uid)) return; // 멱등
       const cap = typeof data?.capacity === 'number' ? data.capacity : undefined;
       if (cap && participants.length >= cap) throw httpError('room-full', 409);
 
       participants.push(uid);
+      joined = true;
 
       tx.update(roomRef, {
         participants,
@@ -50,17 +47,25 @@ export async function POST(req: Request) {
       });
     });
 
-    // ✅ 토픽 구독(멱등)
-    const userDoc = await db.collection('users').doc(uid).get();
-    const tokens: string[] = Array.isArray(userDoc.data()?.fcmTokens) ? userDoc.data()!.fcmTokens : [];
-    if (tokens.length) {
-      await messaging.subscribeToTopic(tokens, topicForRoom(roomId));
+    if (joined) {
+      // 점수 +5
+      const nowIso = new Date().toISOString();
+      await db.collection('scores').doc(uid).set({
+        total: admin.firestore.FieldValue.increment(5),
+        joinedRooms: admin.firestore.FieldValue.increment(1),
+        lastUpdatedAt: nowIso,
+      }, { merge: true });
+
+      // 방 토픽 구독(선택)
+      const userDoc = await db.collection('users').doc(uid).get();
+      const tokens: string[] = Array.isArray(userDoc.data()?.fcmTokens) ? userDoc.data()!.fcmTokens : [];
+      if (tokens.length) {
+        await messaging.subscribeToTopic(tokens, topicForRoom(roomId));
+      }
     }
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    const status = e?.status ?? 500;
-    const msg = e?.message ?? String(e);
-    return NextResponse.json({ error: msg }, { status });
+    return NextResponse.json({ error: e?.message ?? String(e) }, { status: e?.status ?? 500 });
   }
 }
