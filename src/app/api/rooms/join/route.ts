@@ -1,9 +1,7 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
+// src/app/api/rooms/join/route.ts
 import { NextResponse } from 'next/server';
-import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
+import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
+import { topicForRoom } from '@/lib/topic';
 
 function httpError(message: string, status = 400) {
   const e: any = new Error(message);
@@ -15,20 +13,14 @@ export async function POST(req: Request) {
   try {
     const auth = getAdminAuth();
     const db = getAdminDb();
+    const messaging = getAdminMessaging();
 
-    // 인증 토큰
     const authHeader = req.headers.get('authorization') || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const { uid } = await auth.verifyIdToken(idToken);
 
-    // 요청 본문
-    let body: any;
-    try {
-      body = await req.json();
-    } catch {
-      throw httpError('invalid-json', 400);
-    }
+    const body = await req.json().catch(() => ({}));
     const roomId = body?.roomId;
     if (!roomId) throw httpError('roomId required', 400);
 
@@ -37,24 +29,15 @@ export async function POST(req: Request) {
     await db.runTransaction(async (tx) => {
       const snap = await tx.get(roomRef);
       if (!snap.exists) throw httpError('room-not-found', 404);
-
       const data = snap.data() as any;
       const now = new Date();
 
-      // 종료/만료 체크
       if (data?.closed === true) throw httpError('room-closed', 400);
       if (data?.endAt && now >= new Date(data.endAt)) throw httpError('room-ended', 400);
 
-      // ✅ 10분 잠금 제거됨 (joinLockUntil 무시)
-
-      // 중복 참여 방지
       const participants: string[] = Array.isArray(data?.participants) ? data.participants : [];
-      if (participants.includes(uid)) {
-        // 이미 참여 중이면 멱등 성공
-        return;
-      }
+      if (participants.includes(uid)) return;
 
-      // 정원 확인
       const cap = typeof data?.capacity === 'number' ? data.capacity : undefined;
       if (cap && participants.length >= cap) throw httpError('room-full', 409);
 
@@ -66,6 +49,13 @@ export async function POST(req: Request) {
         updatedAt: now.toISOString(),
       });
     });
+
+    // ✅ 토픽 구독(멱등)
+    const userDoc = await db.collection('users').doc(uid).get();
+    const tokens: string[] = Array.isArray(userDoc.data()?.fcmTokens) ? userDoc.data()!.fcmTokens : [];
+    if (tokens.length) {
+      await messaging.subscribeToTopic(tokens, topicForRoom(roomId));
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
