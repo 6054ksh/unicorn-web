@@ -15,7 +15,7 @@ type Room = {
   participantsCount?: number;
   type?: string;
   content?: string;
-  state?: 'preparing' | 'ongoing' | 'ended';
+  state?: 'preparing' | 'ongoing' | 'ended'; // 파생
 };
 
 const FETCH_URL = '/api/rooms/list?status=all&limit=200';
@@ -30,13 +30,25 @@ export default function RoomsPage() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [actionMsg, setActionMsg] = useState<string>('');
 
+  const computeState = (r: Room): Room => {
+    const now = Date.now();
+    const start = r.startAt ? new Date(r.startAt).getTime() : 0;
+    const end = r.endAt ? new Date(r.endAt).getTime() : 0;
+    let state: Room['state'] = 'preparing';
+    if (r.closed) state = 'ended';
+    else if (end && now >= end) state = 'ended';
+    else if (start && now >= start) state = 'ongoing';
+    return { ...r, state };
+  };
+
   const fetchAll = async () => {
     setErr('');
     try {
       const res = await fetch(FETCH_URL, { cache: 'no-store' });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || 'fetch failed');
-      setRooms(j.rooms || []);
+      const list: Room[] = (j.rooms || []).map(computeState);
+      setRooms(list);
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     } finally {
@@ -44,16 +56,10 @@ export default function RoomsPage() {
     }
   };
 
-  useEffect(() => {
-    fetchAll();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   useEffect(() => {
-    if (!auto) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
-      return;
-    }
+    if (!auto) { if (timerRef.current) clearInterval(timerRef.current); timerRef.current = null; return; }
     timerRef.current = setInterval(fetchAll, 10000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [auto]);
@@ -70,10 +76,9 @@ export default function RoomsPage() {
         (r.content || '').toLowerCase().includes(s)
       );
     }
-    // 정렬: ongoing → preparing → ended, 그 안에서는 시작시각 가까운 순
     const weight = (r: Room) => r.state === 'ongoing' ? 0 : r.state === 'preparing' ? 1 : 2;
     list.sort((a, b) => {
-      const wa = weight(a); const wb = weight(b);
+      const wa = weight(a), wb = weight(b);
       if (wa !== wb) return wa - wb;
       const ta = a.startAt ? new Date(a.startAt).getTime() : 0;
       const tb = b.startAt ? new Date(b.startAt).getTime() : 0;
@@ -107,10 +112,7 @@ export default function RoomsPage() {
   const join = async (roomId: string) => {
     setActionMsg('');
     try {
-      const res = await authedFetch('/api/rooms/join', {
-        method: 'POST',
-        body: JSON.stringify({ roomId }),
-      });
+      const res = await authedFetch('/api/rooms/join', { method: 'POST', body: JSON.stringify({ roomId }) });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || '참여 실패');
       setActionMsg('참여 완료! 목록을 새로고침합니다.');
@@ -121,7 +123,7 @@ export default function RoomsPage() {
   };
 
   return (
-    <main style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
+    <main style={{ padding: 24 }}>
       <h1 style={{ marginBottom: 12 }}>모임 방 목록</h1>
 
       {/* 컨트롤 바 */}
@@ -132,11 +134,9 @@ export default function RoomsPage() {
               key={t}
               onClick={() => setTab(t)}
               style={{
-                padding: '6px 10px',
-                borderRadius: 6,
+                padding: '6px 10px', borderRadius: 6,
                 border: '1px solid ' + (tab === t ? '#444' : 'transparent'),
-                background: tab === t ? '#fff' : 'transparent',
-                cursor: 'pointer'
+                background: tab === t ? '#fff' : 'transparent', cursor: 'pointer'
               }}
             >
               {t === 'all' ? '전체' : t === 'preparing' ? '모집중' : t === 'ongoing' ? '진행중' : '종료'}
@@ -178,10 +178,7 @@ export default function RoomsPage() {
                   {r.title}
                 </a>
                 <span style={{
-                  fontSize: 12,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  border: '1px solid #ddd',
+                  fontSize: 12, padding: '2px 8px', borderRadius: 999, border: '1px solid #ddd',
                   background: r.state === 'ongoing' ? '#e6f4ea' : r.state === 'ended' ? '#f3f4f6' : '#eef2ff',
                   color: r.state === 'ongoing' ? '#166534' : r.state === 'ended' ? '#374151' : '#3730a3'
                 }}>
@@ -203,33 +200,24 @@ export default function RoomsPage() {
                 </div>
                 <div style={{ marginTop: 6, height: 8, background: '#f2f3f5', borderRadius: 999 }}>
                   <div style={{
-                    width: `${pct}%`,
-                    height: '100%',
+                    width: `${pct}%`, height: '100%',
                     background: full ? '#ef4444' : '#3b82f6',
-                    borderRadius: 999,
-                    transition: 'width .3s ease'
+                    borderRadius: 999, transition: 'width .3s ease'
                   }} />
                 </div>
               </div>
 
-              {/* 액션 */}
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <a
-                  href={`/room/${r.id}`}
-                  style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111' }}
-                >
+                <a href={`/room/${r.id}`} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111' }}>
                   상세보기
                 </a>
                 <button
                   onClick={() => join(r.id)}
                   disabled={!canJoin(r)}
                   style={{
-                    padding: '6px 10px',
-                    borderRadius: 8,
-                    border: '1px solid #ddd',
+                    padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd',
                     background: canJoin(r) ? '#111' : '#e5e7eb',
-                    color: canJoin(r) ? '#fff' : '#999',
-                    cursor: canJoin(r) ? 'pointer' : 'not-allowed'
+                    color: canJoin(r) ? '#fff' : '#999', cursor: canJoin(r) ? 'pointer' : 'not-allowed'
                   }}
                   title={!canJoin(r) ? '정원초과/종료/닫힘' : '참여하기'}
                 >
