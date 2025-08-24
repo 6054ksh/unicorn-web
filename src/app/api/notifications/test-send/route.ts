@@ -2,6 +2,7 @@ export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
+import * as admin from 'firebase-admin';
 
 export async function POST(req: Request) {
   try {
@@ -25,15 +26,28 @@ export async function POST(req: Request) {
       webpush: {
         headers: { Urgency: 'high', TTL: '60' },
         fcmOptions: { link: url },
-        notification: {
-          title, body,
-          tag: 'test-noti', renotify: true,
-        },
+        notification: { title, body, tag: 'test-noti', renotify: true },
       },
       data: { url },
     });
 
-    return NextResponse.json({ ok: true, successCount: res.successCount, failureCount: res.failureCount });
+    // 실패 토큰은 즉시 제거
+    const bad: string[] = [];
+    res.responses.forEach((r, i) => {
+      if (!r.success) {
+        const code = (r.error as any)?.code || '';
+        if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
+          bad.push(tokens[i]);
+        }
+      }
+    });
+    if (bad.length) {
+      await db.collection('users').doc(uid).update({
+        fcmTokens: admin.firestore.FieldValue.arrayRemove(...bad),
+      });
+    }
+
+    return NextResponse.json({ ok: true, successCount: res.successCount, failureCount: res.failureCount, cleaned: bad.length });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
   }
