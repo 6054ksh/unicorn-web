@@ -1,4 +1,3 @@
-// src/app/scores/page.tsx
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -12,6 +11,8 @@ type Row = {
   createdRooms?: number;
   joinedRooms?: number;
   lastUpdatedAt?: string;
+  thumbsCount?: number;
+  heartsCount?: number;
 };
 
 async function fetchScores(): Promise<{ users: Row[] }> {
@@ -28,16 +29,18 @@ export default async function ScoresPage() {
     <main style={{ padding: 24 }}>
       <h1>점수판</h1>
       <p style={{ opacity: .7, marginBottom: 8 }}>
-        ※ 실시간(새로고침 기준) 반영. (개설:+30 / 정원≥8:+40 / 참여:+5 / 나가기:-5 / 노쇼:-20)
+        ※ 실시간(새로고침 기준). (개설:+30 / 정원≥8:+40 / 참여:+5 / 나가기:-5 / 노쇼:-20)
       </p>
 
       <div style={{ overflowX:'auto' }}>
-        <table style={{ borderCollapse:'collapse', minWidth: 740 }}>
+        <table style={{ borderCollapse:'collapse', minWidth: 840 }}>
           <thead>
             <tr>
               <th style={th}>순위</th>
               <th style={th}>이름</th>
               <th style={th}>칩</th>
+              <th style={th}>👍</th>
+              <th style={th}>❤️</th>
               <th style={th}>총점</th>
               <th style={th}>개설 수</th>
               <th style={th}>참여 수</th>
@@ -66,6 +69,8 @@ export default async function ScoresPage() {
                     ))}
                   </div>
                 </td>
+                <td style={tdCenter}>{u.thumbsCount ?? 0}</td>
+                <td style={tdCenter}>{u.heartsCount ?? 0}</td>
                 <td style={tdRight}><b>{u.total}</b></td>
                 <td style={tdRight}>{u.createdRooms ?? 0}</td>
                 <td style={tdRight}>{u.joinedRooms ?? 0}</td>
@@ -73,7 +78,7 @@ export default async function ScoresPage() {
               </tr>
             ))}
             {!users.length && (
-              <tr><td colSpan={7} style={{ padding: 16, textAlign:'center', color:'#666' }}>아직 점수가 없습니다.</td></tr>
+              <tr><td colSpan={9} style={{ padding: 16, textAlign:'center', color:'#666' }}>아직 점수가 없습니다.</td></tr>
             )}
           </tbody>
         </table>
@@ -81,7 +86,6 @@ export default async function ScoresPage() {
     </main>
   );
 }
-
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #ddd', whiteSpace:'nowrap' };
 const tdLeft: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', whiteSpace:'nowrap' };
 const tdRight: React.CSSProperties = { textAlign: 'right', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', whiteSpace:'nowrap' };

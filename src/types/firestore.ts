@@ -1,68 +1,54 @@
-export type ISODateString = string;
+export const COL = {
+  users: 'users',
+  rooms: 'rooms',
+  scores: 'scores',
+  admins: 'admins',
+  roomVotes: 'roomVotes',
+} as const;
 
-export interface UserDoc {
+export type UserDoc = {
   uid: string;
-  provider: 'kakao' | string;
-  name: string;
+  name?: string;
   nameLower?: string;
   profileImage?: string;
-  tempTitles?: string[];
   fcmTokens?: string[];
-  lastKakaoSyncAt?: ISODateString;
-  createdAt: ISODateString;
-  updatedAt: ISODateString;
-}
+  tempTitles?: string[]; // 다음 참여 전까지 표시
+};
 
-export interface AdminDoc { isAdmin: boolean; }
-
-export interface RoomDoc {
+export type RoomDoc = {
   title: string;
   titleLower: string;
   type?: string;
   content?: string;
   location: string;
   capacity: number;
-  startAt: ISODateString;
-  endAt: ISODateString;     // 기본: startAt + 5h
-  revealAt: ISODateString;  // 기본: startAt - 1h
+  startAt: string;   // ISO
+  endAt: string;     // ISO (자동: 시작+5h)
+  revealAt: string;  // ISO (시작-1h)
   kakaoOpenChatUrl?: string | null;
   creatorUid: string;
   participants: string[];
   participantsCount: number;
   closed: boolean;
-  createdAt: ISODateString;
-  updatedAt: ISODateString;
-}
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+};
 
-export interface ScoreDoc {
+export type ScoreDoc = {
   total: number;
   createdRooms?: number;
   joinedRooms?: number;
-  lastUpdatedAt?: ISODateString;
-}
+  lastUpdatedAt?: string;
+  thumbsCount?: number; // 👍 누적
+  heartsCount?: number; // ❤️ 누적
+};
 
-export const COL = {
-  users: 'users',
-  admins: 'admins',
-  rooms: 'rooms',
-  scores: 'scores',
-} as const;
-
-export type RoomState = 'preparing' | 'ongoing' | 'ended' | 'closed';
-
-export function getRoomState(room: Pick<RoomDoc, 'startAt'|'endAt'|'closed'>): RoomState {
-  if (room.closed) return 'closed';
-  const now = Date.now();
-  const s = Date.parse(room.startAt);
-  const e = Date.parse(room.endAt);
-  if (Number.isNaN(s) || Number.isNaN(e)) return 'preparing';
-  if (now < s) return 'preparing';
-  if (now >= e) return 'ended';
-  return 'ongoing';
-}
-
-export function toDateSafe(iso?: string): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+export type VoteDoc = {
+  roomId: string;
+  voterUid: string;
+  thumbsForUid?: string | null;     // 참가자 중 1명 (선택)
+  heartForUid?: string | null;      // 참가자 중 1명 (선택)
+  noshowUid?: string | 'none' | null; // 참가자 중 1명 또는 'none'
+  createdAt: string;
+  updatedAt: string;
+};
