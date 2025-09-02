@@ -4,6 +4,7 @@ export const COL = {
   scores: 'scores',
   admins: 'admins',
   roomVotes: 'roomVotes',
+  feedback: 'feedback', // 👈 추가
 } as const;
 
 export type UserDoc = {
@@ -51,4 +52,20 @@ export type VoteDoc = {
   noshowUid?: string | 'none' | null; // 참가자 중 1명 또는 'none'
   createdAt: string;
   updatedAt: string;
+};
+
+
+export type FeedbackStatus = 'open' | 'in_progress' | 'resolved';
+
+export type FeedbackDoc = {
+  id?: string;
+  userUid?: string | null;
+  category: 'bug' | 'idea' | 'other';
+  message: string;
+  contact?: string;
+  status: FeedbackStatus;
+  createdAt: string;      // ISO
+  lastUpdatedAt?: string; // ISO
+  ua?: string;
+  referer?: string;
 };
