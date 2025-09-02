@@ -1,14 +1,31 @@
-export const runtime = 'nodejs';
-
+// src/app/api/rooms/create/route.ts
 import { NextResponse } from 'next/server';
-import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
-import { COL, RoomDoc } from '@/types/firestore';
 import * as admin from 'firebase-admin';
+import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+const COL = {
+  rooms: 'rooms',
+  users: 'users',
+  scores: 'scores',
+  admins: 'admins',
+} as const;
 
 function httpError(message: string, status = 400) {
   const e: any = new Error(message);
   e.status = status;
   return e;
+}
+
+async function getBaseUrlServer(): Promise<string> {
+  if (process.env.NEXT_PUBLIC_BASE_URL) {
+    return process.env.NEXT_PUBLIC_BASE_URL.replace(/\/+$/, '');
+  }
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return 'https://unicorn-web-git-main-6054kshs-projects.vercel.app';
 }
 
 export async function POST(req: Request) {
@@ -17,54 +34,63 @@ export async function POST(req: Request) {
     const db = getAdminDb();
     const messaging = getAdminMessaging();
 
-    // 인증
+    // ------------ 인증 ------------
     const authHeader = req.headers.get('authorization') || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    if (!idToken) throw httpError('unauthorized', 401);
     const { uid } = await auth.verifyIdToken(idToken);
 
-    // 바디
-    const body = await req.json().catch(() => ({}));
+    // ------------ 입력 파싱 ------------
+    const body = await req.json();
+    const title = String(body?.title || '').trim();
+    const location = String(body?.location || '').trim();
+    const capacity = Number(body?.capacity ?? 0);
+    const minCapacity = Number(body?.minCapacity ?? 0);
+    const startAtIso = String(body?.startAt || '').trim(); // ISO
+    const kakaoOpenChatUrl = (body?.kakaoOpenChatUrl ? String(body.kakaoOpenChatUrl).trim() : '') || null;
+    const type = String(body?.type || '').trim();
+    const content = String(body?.content || '').trim();
+
     const missing: string[] = [];
-    const title = (body?.title || '').trim();             if (!title) missing.push('title');
-    const location = (body?.location || '').trim();       if (!location) missing.push('location');
-    const capacity = Number(body?.capacity || 0);         if (!capacity || capacity < 1) missing.push('capacity');
-    const startAtRaw = (body?.startAt || '').trim();      if (!startAtRaw) missing.push('startAt');
-    if (missing.length) return NextResponse.json({ error: 'missing fields', missing }, { status: 400 });
+    if (!title) missing.push('title');
+    if (!location) missing.push('location');
+    if (!capacity) missing.push('capacity');
+    if (!minCapacity) missing.push('minCapacity');
+    if (!startAtIso) missing.push('startAt');
+    if (missing.length) throw httpError(`missing fields: ${missing.join(',')}`, 400);
 
-    const startAt = new Date(startAtRaw);
-    if (Number.isNaN(startAt.getTime())) throw httpError('invalid startAt', 400);
+    if (!Number.isFinite(capacity) || capacity < 1) throw httpError('invalid capacity', 400);
+    if (!Number.isFinite(minCapacity) || minCapacity < 1) throw httpError('invalid minCapacity', 400);
+    if (minCapacity > capacity) throw httpError('minCapacity must be ≤ capacity', 400);
 
-    // ---- 하루 1회 개설 제한 (관리자는 예외) ----
+    const startAt = new Date(startAtIso);
+    if (isNaN(startAt.getTime())) throw httpError('invalid startAt', 400);
+
+    // ------------ 하루 1회 개설 제한(관리자 제외) ------------
     const adminSnap = await db.collection(COL.admins).doc(uid).get();
     const isAdmin = adminSnap.exists && !!adminSnap.data()?.isAdmin;
 
     if (!isAdmin) {
       const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-      // creatorUid == uid & createdAt desc 1개 → createdAt 비교
       let blocked = false;
+
       try {
-        const qs = await db.collection(COL.rooms)
+        // creatorUid+createdAt 복합 인덱스 권장
+        const qs = await db
+          .collection(COL.rooms)
           .where('creatorUid', '==', uid)
+          .where('createdAt', '>=', cutoffIso)
           .orderBy('createdAt', 'desc')
           .limit(1)
           .get();
-
-        const last = qs.docs[0];
-        if (last) {
-          const lastCreatedAt = (last.data() as any).createdAt as string | undefined;
-          if (lastCreatedAt && lastCreatedAt >= cutoffIso) blocked = true;
-        }
-      } catch (e) {
-        // 인덱스 문제나 예외 시, 넓게 조회 후 필터
+        blocked = !qs.empty;
+      } catch {
+        // 인덱스 없을 때 폴백
         const qs = await db.collection(COL.rooms).where('creatorUid', '==', uid).get();
-        const arr = qs.docs
+        const last24h = qs.docs
           .map(d => d.data() as any)
-          .filter(x => x?.createdAt)
-          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-        const last = arr[0];
-        if (last && last.createdAt >= cutoffIso) blocked = true;
+          .filter(x => x?.createdAt && String(x.createdAt) >= cutoffIso);
+        blocked = last24h.length > 0;
       }
 
       if (blocked) {
@@ -75,41 +101,50 @@ export async function POST(req: Request) {
       }
     }
 
-    // ---- 자동 시간 계산 ----
-    const endAt = new Date(startAt.getTime() + 5 * 60 * 60 * 1000);   // +5h
-    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000);    // -1h
+    // ------------ 자동 시간 계산 ------------
+    const endAt = new Date(startAt.getTime() + 5 * 60 * 60 * 1000);   // 시작 + 5시간
+    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000);    // 시작 - 1시간
     const nowIso = new Date().toISOString();
 
-    const data: RoomDoc = {
+    // ------------ 문서 생성 ------------
+    const roomDoc = {
       title,
       titleLower: title.toLowerCase(),
-      type: (body?.type || '').trim() || undefined,
-      content: (body?.content || '').trim() || undefined,
+      type: type || null,
+      content: content || null,
       location,
       capacity,
+      minCapacity,
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
       revealAt: revealAt.toISOString(),
-      kakaoOpenChatUrl: body?.kakaoOpenChatUrl?.trim() || null,
+      kakaoOpenChatUrl,
       creatorUid: uid,
-      participants: [],
+      participants: [] as string[],
       participantsCount: 0,
       closed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
     };
 
-    const ref = await db.collection(COL.rooms).add(data);
+    const ref = await db.collection(COL.rooms).add(roomDoc);
 
-    // 점수(+30 / 정원≥8:+40)
+    // ------------ 점수(+30 / 정원≥8:+40) ------------
     const plus = 30 + (capacity >= 8 ? 40 : 0);
-    await db.collection(COL.scores).doc(uid).set({
-      total: admin.firestore.FieldValue.increment(plus),
-      createdRooms: admin.firestore.FieldValue.increment(1),
-      lastUpdatedAt: nowIso,
-    }, { merge: true });
+    await db
+      .collection(COL.scores)
+      .doc(uid)
+      .set(
+        {
+          total: admin.firestore.FieldValue.increment(plus),
+          createdRooms: admin.firestore.FieldValue.increment(1),
+          lastUpdatedAt: nowIso,
+        },
+        { merge: true }
+      );
 
-    // ---- 빠른 알림: 등록된 모든 토큰에 멀티캐스트 ----
+    // ------------ 빠른 알림: 등록된 모든 토큰에 멀티캐스트 ------------
+    // users.*.fcmTokens(문자열 배열)을 스캔
     const usersSnap = await db.collection(COL.users).get();
     const tokens: string[] = [];
     const tokenOwners = new Map<string, string[]>(); // token -> [uid..]
@@ -117,57 +152,71 @@ export async function POST(req: Request) {
     usersSnap.forEach(d => {
       const v = d.data() as any;
       const arr: string[] = Array.isArray(v?.fcmTokens) ? v.fcmTokens : [];
-      arr.forEach(t => {
-        if (!t) return;
-        if (!tokenOwners.has(t)) tokenOwners.set(t, []);
-        tokenOwners.get(t)!.push(d.id);
-        if (!tokens.includes(t)) tokens.push(t);
-      });
+      for (const t of arr) {
+        const tok = String(t || '').trim();
+        if (!tok) continue;
+        if (!tokenOwners.has(tok)) tokenOwners.set(tok, []);
+        tokenOwners.get(tok)!.push(d.id);
+        if (!tokens.includes(tok)) tokens.push(tok);
+      }
     });
 
-    const link = `/room/${ref.id}`;
-    for (let i = 0; i < tokens.length; i += 500) {
-      const chunk = tokens.slice(i, i + 500);
-      const res = await messaging.sendEachForMulticast({
-        tokens: chunk,
-        webpush: {
-          headers: { Urgency: 'high', TTL: '120' },
-          fcmOptions: { link },
-          notification: {
-            title: '새 모임이 올라왔어요 🎉',
-            body: `『${title}』 — ${location} / 정원 ${capacity}명`,
-            tag: 'room-created',
-            renotify: true,
-          },
-        },
-        data: { url: link, roomId: ref.id },
-      });
+    if (tokens.length) {
+      const base = await getBaseUrlServer();
+      const link = `${base}/room/${ref.id}`;
 
-      // 실패 토큰 제거
-      const bad: string[] = [];
-      res.responses.forEach((r, idx) => {
-        if (!r.success) {
-          const code = (r.error as any)?.code || '';
-          if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
-            bad.push(chunk[idx]);
+      for (let i = 0; i < tokens.length; i += 500) {
+        const chunk = tokens.slice(i, i + 500);
+
+        const resp = await messaging.sendEachForMulticast({
+          tokens: chunk,
+          webpush: {
+            headers: { Urgency: 'high', TTL: '120' }, // 빠른 푸시
+            fcmOptions: { link },
+            notification: {
+              title: '새 모임이 올라왔어요 🎉',
+              body: `『${title}』 — ${location} / 정원 ${capacity}명`,
+              tag: 'room-created',
+              renotify: true,
+            },
+          },
+          data: { url: link, roomId: ref.id },
+        });
+
+        // 불량 토큰 정리
+        const bad: string[] = [];
+        resp.responses.forEach((r, idx) => {
+          if (!r.success) {
+            const code = (r.error as any)?.code || '';
+            if (
+              code.includes('registration-token-not-registered') ||
+              code.includes('invalid-argument')
+            ) {
+              bad.push(chunk[idx]);
+            }
           }
-        }
-      });
-      if (bad.length) {
-        const batch = db.batch();
-        for (const t of bad) {
-          const owners = tokenOwners.get(t) || [];
-          for (const ownerUid of owners) {
-            const ref = db.collection(COL.users).doc(ownerUid);
-            batch.update(ref, { fcmTokens: admin.firestore.FieldValue.arrayRemove(t) });
+        });
+
+        if (bad.length) {
+          const batch = db.batch();
+          for (const t of bad) {
+            const owners = tokenOwners.get(t) || [];
+            for (const ownerUid of owners) {
+              const uref = db.collection(COL.users).doc(ownerUid);
+              batch.update(uref, { fcmTokens: admin.firestore.FieldValue.arrayRemove(t) });
+            }
           }
+          await batch.commit().catch(() => {});
         }
-        await batch.commit();
       }
     }
 
+    // ------------ 응답 ------------
     return NextResponse.json({ ok: true, id: ref.id });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? String(e) }, { status: e?.status ?? 500 });
+    return NextResponse.json(
+      { error: e?.message ?? String(e) },
+      { status: e?.status ?? 500 }
+    );
   }
 }
