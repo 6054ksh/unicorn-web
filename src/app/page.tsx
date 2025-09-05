@@ -1,10 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import HomeNav from '@/components/HomeNav';
+import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { firebaseApp } from '@/lib/firebase';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot, getDocs, documentId } from 'firebase/firestore';
+import {
+  getFirestore,
+  collection,
+  query,
+  where,
+  orderBy,
+  limit as fsLimit,
+  onSnapshot,
+  getDocs,
+  documentId,
+} from 'firebase/firestore';
 import { authedFetch } from '@/lib/authedFetch';
 
 type Room = {
@@ -12,7 +22,6 @@ type Room = {
   title: string;
   location: string;
   capacity: number;
-  minCapacity?: number;
   startAt: string;
   endAt: string;
   revealAt: string;
@@ -24,91 +33,92 @@ type Room = {
 type UserMeta = { uid: string; name?: string; profileImage?: string };
 
 export default function HomePage() {
+  // ---- 상태 ----
   const [uid, setUid] = useState<string | null>(null);
-  const [myRooms, setMyRooms] = useState<Room[]>([]);
+  const [room, setRoom] = useState<Room | null>(null);
   const [users, setUsers] = useState<Record<string, UserMeta>>({});
-  const [vote, setVote] = useState({ roomId: '', thumbsForUid: '', heartForUid: '', noshowUid: 'none' });
+  const [vote, setVote] = useState({ thumbsForUid: '', heartForUid: '', noshowUid: 'none' });
   const [msg, setMsg] = useState('');
 
   const auth = useMemo(() => getAuth(firebaseApp), []);
   const db = useMemo(() => getFirestore(firebaseApp), []);
 
+  // ---- 로그인 감지 ----
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
     return () => unsub();
   }, [auth]);
 
-  // 내가 참여한 방 전체(최근 몇 개)를 받아서 클라에서 정렬/필터
+  // ---- 내가 참여한 최신 방(모집중/진행중/종료+24h) 1개 구독 ----
   useEffect(() => {
-    if (!uid) { setMyRooms([]); setUsers({}); return; }
-
+    if (!uid) {
+      setRoom(null);
+      setUsers({});
+      return;
+    }
     const qy = query(
       collection(db, 'rooms'),
       where('participants', 'array-contains', uid),
+      orderBy('startAt', 'desc'),
+      fsLimit(10)
     );
     const unsub = onSnapshot(qy, async (snap) => {
-      const all = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Room[];
-
-      // 종료 +24h 이내 or 미종료(모집/진행)만 남김
       const now = Date.now();
-      const kept = all.filter(r => {
-        if (!r.endAt) return true;
-        const end = new Date(r.endAt).getTime();
-        const endedWithin1d = now < end + 24 * 60 * 60 * 1000;
-        return !r.closed || endedWithin1d;
-      });
+      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Room[];
 
-      // 최근 시작순으로 정렬
-      kept.sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
+      // 진행중/모집중 || 종료 + 24시간 내 하나 고르기
+      const picked =
+        rows.find((r) => !r.closed) ||
+        rows.find((r) => {
+          const end = new Date(r.endAt).getTime();
+          return now < end + 24 * 60 * 60 * 1000; // 종료 후 24h
+        }) ||
+        null;
 
-      // 최신 3개만 보여줌 (필요 시 늘릴 수 있음)
-      const top = kept.slice(0, 3);
-      setMyRooms(top);
+      setRoom(picked);
 
-      // 유저 프로필 로드 (참가자 집합)
-      const ids = Array.from(new Set(top.flatMap(r => r.participants || [])));
-      if (!ids.length) { setUsers({}); return; }
-      const chunks: string[][] = [];
-      for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
-      const map: Record<string, UserMeta> = {};
-      for (const g of chunks) {
-        const uQ = query(collection(db, 'users'), where(documentId(), 'in', g));
-        const uS = await getDocs(uQ);
-        uS.forEach(d => {
-          const v = d.data() as any;
-          map[d.id] = { uid: d.id, name: v?.name || '(이름없음)', profileImage: v?.profileImage || '' };
-        });
+      // 참가자 이름/이미지 매핑
+      if (picked?.participants?.length) {
+        const ids = picked.participants!;
+        const chunks: string[][] = [];
+        for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+        const map: Record<string, UserMeta> = {};
+        for (const g of chunks) {
+          const uQ = query(collection(db, 'users'), where(documentId(), 'in', g));
+          const uS = await getDocs(uQ);
+          uS.forEach((d) => {
+            const v = d.data() as any;
+            map[d.id] = {
+              uid: d.id,
+              name: v?.name || '(이름없음)',
+              profileImage: v?.profileImage || '',
+            };
+          });
+        }
+        setUsers(map);
+      } else {
+        setUsers({});
       }
-      setUsers(map);
-
-      // 가장 최근 “종료된” 방 1개 잡아서 투표 roomId로 설정
-      const ended = kept
-        .filter(r => new Date().getTime() >= new Date(r.endAt).getTime())
-        .sort((a, b) => new Date(b.endAt).getTime() - new Date(a.endAt).getTime());
-      setVote(v => ({ ...v, roomId: ended[0]?.id || '' }));
-    }, (err) => {
-      console.warn('my rooms snapshot error', err);
-      setMyRooms([]);
     });
-
     return () => unsub();
   }, [db, uid]);
 
-  const stateLabel = (r: Room) => {
-    const now = new Date();
+  // ---- 라벨 계산 ----
+  const stateLabel = (r: Room | null) => {
+    if (!r) return '';
+    const now = Date.now();
     if (r.closed) return '종료';
-    if (now >= new Date(r.startAt)) return '진행중';
+    if (now >= new Date(r.startAt).getTime()) return '진행중';
     return '모집중';
   };
 
-  const fmt = (iso?: string) => {
-    if (!iso) return '-';
-    const d = new Date(iso);
-    return isNaN(d as any) ? iso : d.toLocaleString();
-  };
+  const within24hAfterEnd =
+    room &&
+    new Date().getTime() >= new Date(room.endAt).getTime() &&
+    new Date().getTime() < new Date(room.endAt).getTime() + 24 * 60 * 60 * 1000;
 
+  // ---- 투표 ----
   const submitVote = async () => {
-    const room = myRooms.find(r => r.id === vote.roomId);
     if (!room) return;
     setMsg('투표 전송 중…');
     try {
@@ -119,7 +129,7 @@ export default function HomePage() {
           thumbsForUid: vote.thumbsForUid || null,
           heartForUid: vote.heartForUid || null,
           noshowUid: vote.noshowUid || 'none',
-        })
+        }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || 'vote failed');
@@ -129,113 +139,204 @@ export default function HomePage() {
     }
   };
 
+  // ---- 스타일 헬퍼 ----
+  const pill = (bg: string, color: string) => ({
+    display: 'inline-block',
+    padding: '4px 10px',
+    fontSize: 12,
+    borderRadius: 999,
+    background: bg,
+    color,
+    border: '1px solid rgba(0,0,0,0.06)',
+  });
+
   return (
-    <main style={{ padding: 0, background:'#fafafa', minHeight:'100vh' }}>
-      <HomeNav />
-
-      <section style={{ padding: 20, display:'grid', gap:16, maxWidth: 960, margin:'0 auto' }}>
-        <header style={{ display:'grid', gap:6 }}>
-          <h1 style={{ margin:0, fontSize: 26, fontWeight:800 }}>UNIcorn 🦄</h1>
-          <p style={{ margin:0, color:'#666' }}>친해지고, 섞이고, 재밌게! 학생회 모임 매칭</p>
-        </header>
-
-        {/* 내 모임들 */}
-        <div style={{ border:'1px solid #e5e7eb', borderRadius:14, background:'#fff', padding:14 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8 }}>
-            <div style={{ fontSize:16, fontWeight:800 }}>내 모임</div>
-            {uid ? <a href="/room" style={{ fontSize:12, color:'#555' }}>모임 목록 전체보기 →</a> : null}
+    <main style={{ padding: 0, background: '#FAFAFD', minHeight: '100vh' }}>
+      {/* 상단 검은 네비 제거 → 밝은 히어로 섹션만 */}
+      <section
+        style={{
+          padding: '28px 20px',
+          background:
+            'linear-gradient(135deg, rgba(255,226,255,0.7) 0%, rgba(220,235,255,0.6) 50%, rgba(220,255,236,0.6) 100%)',
+          borderBottom: '1px solid #eceef3',
+        }}
+      >
+        <div style={{ maxWidth: 960, margin: '0 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={pill('#fff', '#7c3aed') as React.CSSProperties}>UNI 학생회</span>
+            <span style={pill('#fff', '#0ea5e9') as React.CSSProperties}>서로 더 친해지기</span>
           </div>
-
-          {!uid && (
-            <div style={{ color:'#666', fontSize:13, marginTop:6 }}>
-              <b>로그인이 필요합니다.</b> <a href="/login">로그인</a> 후 참여/투표를 이용하세요.
-            </div>
-          )}
-
-          {uid && myRooms.length === 0 && (
-            <div style={{ color:'#666', fontSize:13, marginTop:6 }}>참여 중이거나 최근(24시간 내) 종료된 모임이 없습니다.</div>
-          )}
-
-          {uid && myRooms.length > 0 && (
-            <div style={{ display:'grid', gap:10, marginTop:8 }}>
-              {myRooms.map((r) => (
-                <div key={r.id} style={{ border:'1px solid #eee', borderRadius:10, padding:12 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                    <a href={`/room/${r.id}`} style={{ textDecoration:'none', color:'#111', fontWeight:700 }}>
-                      {r.title}
-                    </a>
-                    <span style={{
-                      fontSize: 12, padding:'2px 8px', borderRadius:999, border:'1px solid #ddd',
-                      background: stateLabel(r)==='진행중' ? '#e6f4ea' : stateLabel(r)==='종료' ? '#f3f4f6' : '#eef2ff',
-                      color: stateLabel(r)==='진행중' ? '#166534' : stateLabel(r)==='종료' ? '#374151' : '#3730a3'
-                    }}>
-                      {stateLabel(r)}
-                    </span>
-                  </div>
-                  <div style={{ fontSize:13, color:'#666', marginTop:4 }}>
-                    장소: {r.location} · 시간: {fmt(r.startAt)} ~ {fmt(r.endAt)}
-                    {typeof r.minCapacity === 'number' ? <> · 최소시작: {r.minCapacity}명</> : null}
-                    {' · '}정원: {r.capacity}명 / 참여: {r.participantsCount ?? (r.participants?.length ?? 0)}명
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <h1 style={{ margin: '10px 0 6px', fontSize: 28, fontWeight: 900, letterSpacing: -0.2 }}>UNIcorn 🦄</h1>
+          <p style={{ margin: 0, color: '#555', fontSize: 14 }}>
+            익명 매칭으로 가볍게 열고, 쉽게 참여해요. 오늘도 한 걸음 더 친해지기!
+          </p>
         </div>
+      </section>
 
-        {/* 투표 패널: 가장 최근 종료 방 1개만 노출 (기능 유지) */}
-        {uid && vote.roomId && (
-          <div style={{ border:'1px dashed #e5e7eb', borderRadius:14, background:'#fff', padding:14 }}>
-            <div style={{ fontWeight:700, marginBottom:6 }}>모임 투표 (종료 후 24시간)</div>
-            <div style={{ display:'grid', gap:8, maxWidth:520 }}>
-              <label style={{ display:'grid', gap:4 }}>
-                <span>👍 따봉 줄 사람</span>
-                <select
-                  value={vote.thumbsForUid}
-                  onChange={e=>setVote(v=>({ ...v, thumbsForUid: e.target.value }))}
-                >
-                  <option value="">선택 안 함</option>
-                  {(myRooms.find(r => r.id === vote.roomId)?.participants || []).map(u => (
-                    <option key={u} value={u}>{users[u]?.name || u}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display:'grid', gap:4 }}>
-                <span>❤️ 하트 줄 사람</span>
-                <select
-                  value={vote.heartForUid}
-                  onChange={e=>setVote(v=>({ ...v, heartForUid: e.target.value }))}
-                >
-                  <option value="">선택 안 함</option>
-                  {(myRooms.find(r => r.id === vote.roomId)?.participants || []).map(u => (
-                    <option key={u} value={u}>{users[u]?.name || u}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display:'grid', gap:4 }}>
-                <span>🚫 노쇼 투표</span>
-                <select
-                  value={vote.noshowUid}
-                  onChange={e=>setVote(v=>({ ...v, noshowUid: e.target.value }))}
-                >
-                  <option value="none">노쇼자 없음</option>
-                  {(myRooms.find(r => r.id === vote.roomId)?.participants || []).map(u => (
-                    <option key={u} value={u}>{users[u]?.name || u}</option>
-                  ))}
-                </select>
-              </label>
-              <div>
-                <button onClick={submitVote} style={{ padding:'8px 12px', borderRadius:8, background:'#111', color:'#fff' }}>
-                  투표하기
-                </button>
-                <span style={{ marginLeft:8, color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</span>
+      {/* 메인 컨텐츠 */}
+      <section style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gap: 16, maxWidth: 960, margin: '0 auto' }}>
+          {/* 내 모임 카드 */}
+          <div style={{ border: '1px solid #e8eaf0', borderRadius: 14, background: '#fff', padding: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>내 모임</span>
+                {room ? (
+                  <span
+                    style={
+                      stateLabel(room) === '진행중'
+                        ? (pill('#e6f4ea', '#166534') as React.CSSProperties)
+                        : stateLabel(room) === '종료'
+                        ? (pill('#f3f4f6', '#374151') as React.CSSProperties)
+                        : (pill('#eef2ff', '#3730a3') as React.CSSProperties)
+                    }
+                  >
+                    {stateLabel(room)}
+                  </span>
+                ) : null}
               </div>
+              {uid ? (
+                <Link href="/room" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
+                  전체 모임 보기 →
+                </Link>
+              ) : null}
             </div>
-          </div>
-        )}
 
-        {/* 중복 이동 버튼 영역은 제거(HomeNav만 유지) */}
+            {uid ? (
+              room ? (
+                <div style={{ marginTop: 8 }}>
+                  <a
+                    href={`/room/${room.id}`}
+                    style={{ textDecoration: 'none', color: '#111', fontWeight: 800, fontSize: 16 }}
+                  >
+                    {room.title}
+                  </a>
+                  <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
+                    장소: {room.location} · 시간:{' '}
+                    {new Date(room.startAt).toLocaleString()} ~ {new Date(room.endAt).toLocaleString()}
+                  </div>
+
+                  {/* 종료 후 24시간 동안 투표 패널 */}
+                  {within24hAfterEnd ? (
+                    <div style={{ marginTop: 12, borderTop: '1px dashed #eee', paddingTop: 12 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>모임 투표</div>
+                      <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
+                        <label style={{ display: 'grid', gap: 4 }}>
+                          <span>👍 따봉 줄 사람</span>
+                          <select
+                            value={vote.thumbsForUid}
+                            onChange={(e) => setVote((v) => ({ ...v, thumbsForUid: e.target.value }))}
+                          >
+                            <option value="">선택 안 함</option>
+                            {(room.participants || []).map((u) => (
+                              <option key={u} value={u}>
+                                {users[u]?.name || u}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label style={{ display: 'grid', gap: 4 }}>
+                          <span>❤️ 하트 줄 사람</span>
+                          <select
+                            value={vote.heartForUid}
+                            onChange={(e) => setVote((v) => ({ ...v, heartForUid: e.target.value }))}
+                          >
+                            <option value="">선택 안 함</option>
+                            {(room.participants || []).map((u) => (
+                              <option key={u} value={u}>
+                                {users[u]?.name || u}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label style={{ display: 'grid', gap: 4 }}>
+                          <span>🚫 노쇼 투표</span>
+                          <select
+                            value={vote.noshowUid}
+                            onChange={(e) => setVote((v) => ({ ...v, noshowUid: e.target.value }))}
+                          >
+                            <option value="none">노쇼자 없음</option>
+                            {(room.participants || []).map((u) => (
+                              <option key={u} value={u}>
+                                {users[u]?.name || u}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div>
+                          <button
+                            onClick={submitVote}
+                            style={{
+                              padding: '8px 12px',
+                              borderRadius: 8,
+                              background: '#111',
+                              color: '#fff',
+                              border: '1px solid #111',
+                            }}
+                          >
+                            투표하기
+                          </button>
+                          <span style={{ marginLeft: 8, color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div style={{ color: '#666', fontSize: 13, marginTop: 4 }}>
+                  참여 중이거나 최근(24시간 내) 종료된 모임이 없습니다.
+                </div>
+              )
+            ) : (
+              <div style={{ color: '#666', fontSize: 13 }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>로그인이 필요합니다</div>
+                <p style={{ margin: 0 }}>
+                  <a href="/login" style={{ color: '#2563eb' }}>
+                    로그인
+                  </a>{' '}
+                  후 내 모임과 투표를 이용하세요.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* 빠른 이동 (중복 버튼 정리: 심플하게 4개만) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+              gap: 10,
+            }}
+          >
+            <a href="/room" className="cardLink" style={card}>
+              모임 목록 보기
+            </a>
+            <a href="/room/new" className="cardLink" style={card}>
+              모임 만들기
+            </a>
+            <a href="/scores" className="cardLink" style={card}>
+              점수판
+            </a>
+            <a href="/notifications/enable" className="cardLink" style={card}>
+              알림 설정
+            </a>
+          </div>
+        </div>
       </section>
     </main>
   );
 }
+
+const card: React.CSSProperties = {
+  display: 'block',
+  padding: 14,
+  border: '1px solid #e5e7eb',
+  borderRadius: 14,
+  background: '#fff',
+  textDecoration: 'none',
+  color: '#111',
+  fontWeight: 700,
+};
