@@ -43,7 +43,8 @@ export async function POST(req: Request) {
     const location = String(body?.location || '').trim();
     const capacity = Number(body?.capacity ?? 0);
     const minCapacity = Number(body?.minCapacity ?? 0);
-    const startAtIso = String(body?.startAt || '').trim();
+    const startAtIso = String(body?.startAt || '').trim(); // ISO
+    const endAtIsoRaw = String(body?.endAt ?? '').trim();  // ISO (선택)
     const kakaoOpenChatUrl = (body?.kakaoOpenChatUrl ? String(body.kakaoOpenChatUrl).trim() : '') || null;
     const type = String(body?.type || '').trim();
     const content = String(body?.content || '').trim();
@@ -62,6 +63,20 @@ export async function POST(req: Request) {
 
     const startAt = new Date(startAtIso);
     if (isNaN(startAt.getTime())) throw httpError('invalid startAt', 400);
+
+    // ---- 종료시간: 입력값 우선, 없으면 +5h ----
+    let endAt: Date;
+    if (endAtIsoRaw) {
+      const endAtCandidate = new Date(endAtIsoRaw);
+      if (isNaN(endAtCandidate.getTime())) throw httpError('invalid endAt', 400);
+      if (endAtCandidate.getTime() <= startAt.getTime()) throw httpError('endAt must be later than startAt', 400);
+      endAt = endAtCandidate;
+    } else {
+      endAt = new Date(startAt.getTime() + 5 * 60 * 60 * 1000);
+    }
+
+    // 구성원 공개(reveal)는 시작 1시간 전
+    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000);
 
     // ---- 하루 1회 개설 제한(관리자 제외) ----
     const adminSnap = await db.collection(COL.admins).doc(uid).get();
@@ -93,12 +108,8 @@ export async function POST(req: Request) {
       }
     }
 
-    // ---- 자동 시간 ----
-    const endAt = new Date(startAt.getTime() + 5 * 60 * 60 * 1000);   // +5h
-    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000);    // -1h
-    const nowIso = new Date().toISOString();
-
     // ---- 문서 생성 (생성자 자동 참여) ----
+    const nowIso = new Date().toISOString();
     const roomDoc = {
       title,
       titleLower: title.toLowerCase(),
@@ -112,8 +123,8 @@ export async function POST(req: Request) {
       revealAt: revealAt.toISOString(),
       kakaoOpenChatUrl,
       creatorUid: uid,
-      participants: [uid] as string[],            // ← 자동 참여
-      participantsCount: 1,                       // ← 자동 참여
+      participants: [uid] as string[],   // 자동 참여
+      participantsCount: 1,
       closed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -128,7 +139,7 @@ export async function POST(req: Request) {
       lastUpdatedAt: nowIso,
     }, { merge: true });
 
-    // ---- 새 모임 알림 (멀티캐스트) ----
+    // ---- 새 모임 알림 ----
     const usersSnap = await db.collection(COL.users).get();
     const tokens: string[] = [];
     const tokenOwners = new Map<string, string[]>();
