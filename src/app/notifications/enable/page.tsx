@@ -1,34 +1,33 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { requestAndGetFcmToken, listenForeground } from '@/lib/firebaseMessaging';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+import React, { useEffect, useState } from 'react';
 import { authedFetch } from '@/lib/authedFetch';
 
-function detectEnv() {
-  const ua = (typeof navigator !== 'undefined' ? navigator.userAgent : '').toLowerCase();
-  const isIOS = /iphone|ipad|ipod/.test(ua);
-  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent || '');
-  const isStandalone = (globalThis as any)?.navigator?.standalone === true || matchMedia?.('(display-mode: standalone)')?.matches;
-  const hasNotification = typeof window !== 'undefined' && 'Notification' in window;
-  const hasSW = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
-  const hasPush = typeof window !== 'undefined' && 'PushManager' in window;
-  return { isIOS, isSafari, isStandalone, hasNotification, hasSW, hasPush };
-}
+// 이 페이지는 브라우저 전용 API(Notification, matchMedia 등)를 쓰므로
+// 어떤 브라우저 전용 코드도 "모듈 최상단"에서 실행되면 안 됩니다.
 
 export default function EnableNotificationsPage() {
   const [status, setStatus] = useState<'idle' | 'granted' | 'denied' | 'error'>('idle');
   const [token, setToken] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
-  const env = useMemo(() => detectEnv(), []);
 
   useEffect(() => {
     let mounted = true;
 
     async function run() {
-      if (!env.hasNotification || !env.hasSW || !env.hasPush) {
-        setMsg('이 브라우저는 웹 푸시를 완전히 지원하지 않습니다.');
+      // 🔒 SSR/빌드 시 안전 가드
+      if (typeof window === 'undefined') return;
+
+      // 권한 요청
+      if (!('Notification' in window)) {
+        setMsg('이 브라우저는 푸시 알림(웹 푸시)을 지원하지 않습니다.');
         return;
       }
+
       const perm = await Notification.requestPermission();
       if (!mounted) return;
 
@@ -39,15 +38,21 @@ export default function EnableNotificationsPage() {
       }
       setStatus('granted');
 
+      // ⬇️ 브라우저 전용 FCM 유틸은 동적 import로 클라이언트에서만 로드
+      const { requestAndGetFcmToken, listenForeground } = await import('@/lib/firebaseMessaging');
+
+      // FCM 토큰 발급
       const t = await requestAndGetFcmToken();
       if (!mounted) return;
       setToken(t);
+
       if (!t) {
         setStatus('error');
         setMsg('FCM 토큰 발급 실패');
         return;
       }
 
+      // 서버에 토큰 등록
       try {
         const res = await authedFetch('/api/me/register-fcm-token', {
           method: 'POST',
@@ -59,11 +64,12 @@ export default function EnableNotificationsPage() {
         } else {
           setMsg('알림 설정 완료');
         }
-      } catch {
+      } catch (e) {
         setStatus('error');
-        setMsg('토큰 등록 에러');
+        setMsg('토큰 등록 중 오류가 발생했습니다.');
       }
 
+      // 포그라운드 수신 로그(선택)
       listenForeground((payload) => {
         console.log('🔔 onMessage:', payload);
       });
@@ -71,34 +77,23 @@ export default function EnableNotificationsPage() {
 
     run();
     return () => { mounted = false; };
-  }, [env.hasNotification, env.hasSW, env.hasPush]);
+  }, []);
 
   return (
-    <main style={{ padding: 24, maxWidth: 720 }}>
+    <main style={{ padding: 24 }}>
       <h1>알림 설정</h1>
       <p>상태: {status}</p>
       {token ? <p style={{ wordBreak: 'break-all' }}>토큰: {token}</p> : null}
       <p>{msg}</p>
 
-      {/* 환경별 가이드 */}
-      {(!env.hasNotification || !env.hasSW || !env.hasPush) && (
-        <div style={{ marginTop: 16, padding: 12, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 10 }}>
-          <b>사용자 가이드</b>
-          <ul style={{ margin: '8px 0 0 16px' }}>
-            {env.isIOS && env.isSafari ? (
-              <>
-                <li>iPhone/iPad Safari에서는 <b>홈 화면에 추가</b>한 후 앱(웹앱)에서 알림을 허용해야 합니다.</li>
-                <li>공유 버튼 → <b>홈 화면에 추가</b> → 홈 화면의 아이콘으로 실행 → 알림 허용</li>
-              </>
-            ) : (
-              <>
-                <li>이 브라우저는 웹 푸시 기능(서비스 워커/Push API)을 완전히 지원하지 않습니다.</li>
-                <li>Chrome/Edge/Firefox(데스크톱/안드로이드)나 PWA 설치 환경에서 다시 시도해 주세요.</li>
-              </>
-            )}
-          </ul>
-        </div>
-      )}
+      <details style={{ marginTop: 12 }}>
+        <summary>도움말</summary>
+        <ul style={{ marginTop: 8 }}>
+          <li>iOS Safari는 iOS 16.4 이상에서만 웹 푸시를 지원하며, <b>홈 화면에 추가(PWA)</b>해야 푸시를 받을 수 있습니다.</li>
+          <li>브라우저의 알림 권한이 “차단”이면, 브라우저 설정에서 사이트 알림 권한을 “허용”으로 바꿔주세요.</li>
+          <li>로그인 상태가 바뀌면 알림 토큰을 다시 등록해 주세요.</li>
+        </ul>
+      </details>
     </main>
   );
 }
