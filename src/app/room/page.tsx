@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { authedFetch } from '@/lib/authedFetch';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
+import { firebaseApp } from '@/lib/firebase';
 
 type Room = {
   id: string;
   title: string;
   location: string;
   capacity: number;
-  minCapacity: number;
   startAt: string | null;
   endAt: string | null;
   closed?: boolean;
@@ -30,6 +31,16 @@ export default function RoomsPage() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [actionMsg, setActionMsg] = useState<string>('');
 
+  const [uid, setUid] = useState<string | null>(null);
+  const [joined, setJoined] = useState<Set<string>>(new Set());
+
+  const auth = useMemo(() => getAuth(firebaseApp), []);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
+    return () => unsub();
+  }, [auth]);
+
   const fetchAll = async () => {
     setErr('');
     try {
@@ -44,31 +55,44 @@ export default function RoomsPage() {
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
-
-  useEffect(() => {
-    if (!auto) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
-      return;
+  // 내가 참여한 방 id 세트
+  const fetchMyIds = async () => {
+    if (!uid) { setJoined(new Set()); return; }
+    try {
+      const res = await authedFetch('/api/rooms/my-ids');
+      const j = await res.json();
+      if (res.ok && Array.isArray(j.ids)) {
+        setJoined(new Set(j.ids));
+      } else {
+        setJoined(new Set());
+      }
+    } catch {
+      setJoined(new Set());
     }
+  };
+
+  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => {
+    if (!auto) { if (timerRef.current) clearInterval(timerRef.current); timerRef.current = null; return; }
     timerRef.current = setInterval(fetchAll, 10000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [auto]);
 
+  useEffect(() => { fetchMyIds(); }, [uid]);
+
   const filtered = useMemo(() => {
     let list = rooms.slice();
-    if (tab !== 'all') list = list.filter(r => r.state === tab);
+    if (tab !== 'all') list = list.filter((r) => r.state === tab);
     if (q.trim()) {
       const s = q.trim().toLowerCase();
-      list = list.filter(r =>
+      list = list.filter((r) =>
         (r.title || '').toLowerCase().includes(s) ||
         (r.location || '').toLowerCase().includes(s) ||
         (r.type || '').toLowerCase().includes(s) ||
         (r.content || '').toLowerCase().includes(s)
       );
     }
-    const weight = (r: Room) => r.state === 'ongoing' ? 0 : r.state === 'preparing' ? 1 : 2;
+    const weight = (r: Room) => (r.state === 'ongoing' ? 0 : r.state === 'preparing' ? 1 : 2);
     list.sort((a, b) => {
       const wa = weight(a); const wb = weight(b);
       if (wa !== wb) return wa - wb;
@@ -88,9 +112,9 @@ export default function RoomsPage() {
 
   const ratio = (r: Room) => {
     const cap = Math.max(0, Number(r.capacity || 0));
-    const joined = Math.max(0, Number(r.participantsCount || 0));
+    const joinedCount = Math.max(0, Number(r.participantsCount || 0));
     if (!cap) return 0;
-    return Math.min(100, Math.round((joined / cap) * 100));
+    return Math.min(100, Math.round((joinedCount / cap) * 100));
   };
 
   const canJoin = (r: Room) => {
@@ -98,6 +122,15 @@ export default function RoomsPage() {
     if (r.state === 'ended') return false;
     const cap = Number(r.capacity || 0);
     if (cap && (r.participantsCount || 0) >= cap) return false;
+    return true;
+  };
+
+  const canLeave = (r: Room) => {
+    if (!uid) return false;
+    if (!joined.has(r.id)) return false;
+    if (r.closed || r.state === 'ended') return false;
+    const now = new Date();
+    if (r.startAt && now >= new Date(r.startAt)) return false; // 시작 후 나가기 금지
     return true;
   };
 
@@ -112,6 +145,7 @@ export default function RoomsPage() {
       if (!res.ok) throw new Error(j?.error || '참여 실패');
       setActionMsg('참여 완료! 목록을 새로고침합니다.');
       await fetchAll();
+      await fetchMyIds();
     } catch (e: any) {
       setActionMsg(e?.message ?? String(e));
     }
@@ -128,6 +162,7 @@ export default function RoomsPage() {
       if (!res.ok) throw new Error(j?.error || '나가기 실패');
       setActionMsg('나가기 완료! 목록을 새로고침합니다.');
       await fetchAll();
+      await fetchMyIds();
     } catch (e: any) {
       setActionMsg(e?.message ?? String(e));
     }
@@ -164,11 +199,6 @@ export default function RoomsPage() {
           style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd', flex: '1 1 240px' }}
         />
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#555' }}>
-          <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-          자동 새로고침(10초)
-        </label>
-
         <button onClick={fetchAll} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd' }}>
           새로고침
         </button>
@@ -177,36 +207,41 @@ export default function RoomsPage() {
       {loading && <p>불러오는 중…</p>}
       {err && <p style={{ color: 'crimson' }}>❌ {err}</p>}
       {actionMsg && <p style={{ color: actionMsg.includes('완료') ? 'green' : 'crimson' }}>{actionMsg}</p>}
-      {!loading && !err && filtered.length === 0 && <p>표시할 방이 없습니다.</p>}
+      {!loading && !err && rooms.length === 0 && <p>표시할 방이 없습니다.</p>}
 
       {/* 카드 리스트 */}
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
         {filtered.map((r) => {
           const pct = ratio(r);
           const full = Number(r.capacity || 0) > 0 && (r.participantsCount || 0) >= Number(r.capacity || 0);
+          const isJoined = joined.has(r.id);
+
           return (
             <div key={r.id} style={{ border: '1px solid #e9e9ec', borderRadius: 12, padding: 14, background: '#fff' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
                 <a href={`/room/${r.id}`} style={{ fontWeight: 800, fontSize: 16, color: '#111', textDecoration: 'none' }}>
                   {r.title}
                 </a>
-                <span style={{
-                  fontSize: 12,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  border: '1px solid #ddd',
-                  background: r.state === 'ongoing' ? '#e6f4ea' : r.state === 'ended' ? '#f3f4f6' : '#eef2ff',
-                  color: r.state === 'ongoing' ? '#166534' : r.state === 'ended' ? '#374151' : '#3730a3'
-                }}>
-                  {r.state === 'ongoing' ? '진행중' : r.state === 'ended' ? '종료' : '모집중'}
-                </span>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {isJoined ? (
+                    <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 999, background: '#F0FDFA', color: '#065F46', border: '1px solid #CCFBF1' }}>
+                      참여중
+                    </span>
+                  ) : null}
+                  <span style={{
+                    fontSize: 12, padding: '2px 8px', borderRadius: 999, border: '1px solid #ddd',
+                    background: r.state === 'ongoing' ? '#e6f4ea' : r.state === 'ended' ? '#f3f4f6' : '#eef2ff',
+                    color: r.state === 'ongoing' ? '#166534' : r.state === 'ended' ? '#374151' : '#3730a3'
+                  }}>
+                    {r.state === 'ongoing' ? '진행중' : r.state === 'ended' ? '종료' : '모집중'}
+                  </span>
+                </div>
               </div>
 
               <div style={{ color: '#555', fontSize: 13, marginTop: 6 }}>
                 <div>장소: {r.location || '-'}</div>
                 <div>시간: {human(r.startAt)} ~ {human(r.endAt)}</div>
                 {r.type ? <div>종류: {r.type}</div> : null}
-                <div>정원: 최대 {r.capacity ?? 0}명 / 최소 {r.minCapacity ?? 1}명</div>
               </div>
 
               {/* 진행도 */}
@@ -228,12 +263,10 @@ export default function RoomsPage() {
 
               {/* 액션 */}
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <a
-                  href={`/room/${r.id}`}
-                  style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111' }}
-                >
+                <a href={`/room/${r.id}`} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #ddd', textDecoration: 'none', color: '#111' }}>
                   상세보기
                 </a>
+
                 <button
                   onClick={() => join(r.id)}
                   disabled={!canJoin(r)}
@@ -249,15 +282,19 @@ export default function RoomsPage() {
                 >
                   참여하기
                 </button>
+
                 <button
                   onClick={() => leave(r.id)}
+                  disabled={!canLeave(r)}
                   style={{
                     padding: '6px 10px',
                     borderRadius: 8,
                     border: '1px solid #ddd',
-                    background: '#fff',
+                    background: canLeave(r) ? '#fff' : '#e5e7eb',
+                    color: canLeave(r) ? '#111' : '#999',
+                    cursor: canLeave(r) ? 'pointer' : 'not-allowed'
                   }}
-                  title="나가기(시작 전까지만 가능)"
+                  title={canLeave(r) ? '시작 전이면 나갈 수 있어요' : '시작 후/종료/미참여 상태는 불가'}
                 >
                   나가기
                 </button>
