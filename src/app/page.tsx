@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { firebaseApp } from '@/lib/firebase';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
@@ -33,7 +33,6 @@ type Room = {
 type UserMeta = { uid: string; name?: string; profileImage?: string };
 
 export default function HomePage() {
-  // ---- 상태 ----
   const [uid, setUid] = useState<string | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
   const [users, setUsers] = useState<Record<string, UserMeta>>({});
@@ -42,36 +41,35 @@ export default function HomePage() {
 
   const auth = useMemo(() => getAuth(firebaseApp), []);
   const db = useMemo(() => getFirestore(firebaseApp), []);
+  const unsubRef = useRef<null | (() => void)>(null);
 
-  // ---- 로그인 감지 ----
+  // 로그인
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
     return () => unsub();
   }, [auth]);
 
-  // ---- 내가 참여한 최신 방(모집중/진행중/종료+24h) 1개 구독 ----
+  // 내 모임(모집중+진행중+종료 24h 이내)을 항상 보여주기 + 인덱스 없는 경우 폴백
   useEffect(() => {
-    if (!uid) {
-      setRoom(null);
-      setUsers({});
-      return;
+    if (unsubRef.current) {
+      unsubRef.current();
+      unsubRef.current = null;
     }
-    const qy = query(
-      collection(db, 'rooms'),
-      where('participants', 'array-contains', uid),
-      orderBy('startAt', 'desc'),
-      fsLimit(10)
-    );
-    const unsub = onSnapshot(qy, async (snap) => {
-      const now = Date.now();
-      const rows = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Room[];
+    setRoom(null);
+    setUsers({});
+    if (!uid) return;
 
-      // 진행중/모집중 || 종료 + 24시간 내 하나 고르기
+    const col = collection(db, 'rooms');
+    const handler = async (snap: any) => {
+      const now = Date.now();
+      const rows = snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })) as Room[];
+
+      // 1) 진행중/모집중 우선, 2) 종료 되었더라도 24h 내면 선택
       const picked =
         rows.find((r) => !r.closed) ||
         rows.find((r) => {
           const end = new Date(r.endAt).getTime();
-          return now < end + 24 * 60 * 60 * 1000; // 종료 후 24h
+          return now < end + 24 * 60 * 60 * 1000;
         }) ||
         null;
 
@@ -88,22 +86,46 @@ export default function HomePage() {
           const uS = await getDocs(uQ);
           uS.forEach((d) => {
             const v = d.data() as any;
-            map[d.id] = {
-              uid: d.id,
-              name: v?.name || '(이름없음)',
-              profileImage: v?.profileImage || '',
-            };
+            map[d.id] = { uid: d.id, name: v?.name || '(이름없음)', profileImage: v?.profileImage || '' };
           });
         }
         setUsers(map);
       } else {
         setUsers({});
       }
-    });
-    return () => unsub();
+    };
+
+    // 1차: orderBy(startAt) + array-contains (인덱스 없어도 되도록 시도, 에러나면 폴백)
+    const tryPrimary = () => {
+      try {
+        const q1 = query(col, where('participants', 'array-contains', uid), orderBy('startAt', 'desc'), fsLimit(10));
+        const unsub = onSnapshot(
+          q1,
+          handler,
+          // 에러 시 폴백 쿼리(정렬 없이 where만 구독)
+          (_err) => {
+            tryFallback();
+          }
+        );
+        unsubRef.current = unsub;
+      } catch {
+        tryFallback();
+      }
+    };
+
+    const tryFallback = () => {
+      const q2 = query(col, where('participants', 'array-contains', uid), fsLimit(10));
+      const unsub = onSnapshot(q2, handler);
+      unsubRef.current = unsub;
+    };
+
+    tryPrimary();
+    return () => {
+      if (unsubRef.current) unsubRef.current();
+      unsubRef.current = null;
+    };
   }, [db, uid]);
 
-  // ---- 라벨 계산 ----
   const stateLabel = (r: Room | null) => {
     if (!r) return '';
     const now = Date.now();
@@ -117,7 +139,6 @@ export default function HomePage() {
     new Date().getTime() >= new Date(room.endAt).getTime() &&
     new Date().getTime() < new Date(room.endAt).getTime() + 24 * 60 * 60 * 1000;
 
-  // ---- 투표 ----
   const submitVote = async () => {
     if (!room) return;
     setMsg('투표 전송 중…');
@@ -139,7 +160,7 @@ export default function HomePage() {
     }
   };
 
-  // ---- 스타일 헬퍼 ----
+  // 스타일
   const pill = (bg: string, color: string) => ({
     display: 'inline-block',
     padding: '4px 10px',
@@ -150,9 +171,22 @@ export default function HomePage() {
     border: '1px solid rgba(0,0,0,0.06)',
   });
 
+  const smallCard = (bg: string, fg: string): React.CSSProperties => ({
+    display: 'block',
+    padding: 14,
+    borderRadius: 14,
+    textDecoration: 'none',
+    background: bg,
+    color: fg,
+    fontWeight: 800,
+    border: '1px solid rgba(0,0,0,.06)',
+    boxShadow: '0 4px 10px rgba(0,0,0,.06)',
+    textAlign: 'center',
+    fontSize: 14,
+  });
+
   return (
     <main style={{ padding: 0, background: '#FAFAFD', minHeight: '100vh' }}>
-      {/* 상단 검은 네비 제거 → 밝은 히어로 섹션만 */}
       <section
         style={{
           padding: '28px 20px',
@@ -164,19 +198,16 @@ export default function HomePage() {
         <div style={{ maxWidth: 960, margin: '0 auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={pill('#fff', '#7c3aed') as React.CSSProperties}>UNI 학생회</span>
-            <span style={pill('#fff', '#0ea5e9') as React.CSSProperties}>서로 더 친해지기</span>
+            <span style={pill('#fff', '#0ea5e9') as React.CSSProperties}>익명 매칭</span>
           </div>
           <h1 style={{ margin: '10px 0 6px', fontSize: 28, fontWeight: 900, letterSpacing: -0.2 }}>UNIcorn 🦄</h1>
-          <p style={{ margin: 0, color: '#555', fontSize: 14 }}>
-            익명 매칭으로 가볍게 열고, 쉽게 참여해요. 오늘도 한 걸음 더 친해지기!
-          </p>
+          <p style={{ margin: 0, color: '#555', fontSize: 14 }}>가볍게 열고, 쉽게 참여해서 더 친해지기!</p>
         </div>
       </section>
 
-      {/* 메인 컨텐츠 */}
       <section style={{ padding: 20 }}>
         <div style={{ display: 'grid', gap: 16, maxWidth: 960, margin: '0 auto' }}>
-          {/* 내 모임 카드 */}
+          {/* 내 모임 */}
           <div style={{ border: '1px solid #e8eaf0', borderRadius: 14, background: '#fff', padding: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
               <div style={{ fontSize: 16, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -197,7 +228,7 @@ export default function HomePage() {
               </div>
               {uid ? (
                 <Link href="/room" style={{ fontSize: 13, color: '#2563eb', textDecoration: 'none' }}>
-                  전체 모임 보기 →
+                  전체 모임 →
                 </Link>
               ) : null}
             </div>
@@ -216,7 +247,7 @@ export default function HomePage() {
                     {new Date(room.startAt).toLocaleString()} ~ {new Date(room.endAt).toLocaleString()}
                   </div>
 
-                  {/* 종료 후 24시간 동안 투표 패널 */}
+                  {/* 종료 후 24시간 투표 */}
                   {within24hAfterEnd ? (
                     <div style={{ marginTop: 12, borderTop: '1px dashed #eee', paddingTop: 12 }}>
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>모임 투표</div>
@@ -303,40 +334,26 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* 빠른 이동 (중복 버튼 정리: 심플하게 4개만) */}
+          {/* 알록달록 작은 이동 카드 (중복 제거, 심플 5종) */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
               gap: 10,
             }}
           >
-            <a href="/room" className="cardLink" style={card}>
-              모임 목록 보기
-            </a>
-            <a href="/room/new" className="cardLink" style={card}>
-              모임 만들기
-            </a>
-            <a href="/scores" className="cardLink" style={card}>
-              점수판
-            </a>
-            <a href="/notifications/enable" className="cardLink" style={card}>
-              알림 설정
-            </a>
+            {!uid ? (
+              <a href="/login" style={smallCard('#FDF2F8', '#BE185D')}>로그인하기</a>
+            ) : (
+              <a href="/me" style={smallCard('#FDF2F8', '#BE185D')}>내 상태</a>
+            )}
+            <a href="/room" style={smallCard('#ECFEFF', '#155E75')}>모임 목록</a>
+            <a href="/room/new" style={smallCard('#EEF2FF', '#3730A3')}>모임 만들기</a>
+            <a href="/scores" style={smallCard('#E6FFFB', '#0F766E')}>점수판</a>
+            <a href="/notifications/enable" style={smallCard('#FFF7ED', '#9A3412')}>알림 설정</a>
           </div>
         </div>
       </section>
     </main>
   );
 }
-
-const card: React.CSSProperties = {
-  display: 'block',
-  padding: 14,
-  border: '1px solid #e5e7eb',
-  borderRadius: 14,
-  background: '#fff',
-  textDecoration: 'none',
-  color: '#111',
-  fontWeight: 700,
-};
