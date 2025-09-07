@@ -2,6 +2,7 @@
 import Script from 'next/script';
 import FcmRegistrar from '@/components/FcmRegistrar';
 import GlobalQuickBar from '@/components/GlobalQuickBar';
+import FloatingBell from '@/components/FloatingBell';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <FcmRegistrar />
         {children}
         <GlobalQuickBar />
+        <FloatingBell />
       </body>
     </html>
   );
