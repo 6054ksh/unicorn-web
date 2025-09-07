@@ -1,3 +1,4 @@
+// src/app/room/new/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -17,8 +18,8 @@ export default function NewRoomPage() {
     location: '',
     date: '',
     time: '',
-    endDate: '',   // 선택
-    endTime: '',   // 선택
+    endDate: '',
+    endTime: '',
     capacity: 6,
     minCapacity: 3,
     kakaoOpenChatUrl: '',
@@ -56,7 +57,7 @@ export default function NewRoomPage() {
           content: form.content.trim(),
           location: form.location.trim(),
           startAt: startAt.toISOString(),
-          endAt: endAtIso, // 없으면 서버에서 +5h 자동
+          endAt: endAtIso,            // 없으면 서버에서 +5h 자동
           capacity: Number(form.capacity),
           minCapacity: Number(form.minCapacity),
           kakaoOpenChatUrl: form.kakaoOpenChatUrl?.trim() || null,
@@ -67,8 +68,7 @@ export default function NewRoomPage() {
       if (!res.ok) throw new Error(json.error || '생성 실패');
 
       setMsg(`✅ 생성 완료!`);
-      // 생성 성공 → 홈으로 이동
-      router.replace('/');
+      router.replace('/');           // 생성 후 홈으로
     } catch (e: any) {
       setMsg('❌ ' + (e?.message ?? String(e)));
     } finally {
@@ -83,7 +83,7 @@ export default function NewRoomPage() {
       <div style={{ marginBottom: 12 }}>
         <h1 style={{ margin: 0 }}>모임 방 만들기 🎉</h1>
         <p style={{ margin: '6px 0 0', color: '#666' }}>
-          제목과 시간, 장소만 정하면 끝! 최소인원/최대정원은 아래 가이드를 참고해 주세요.
+          제목과 시간, 장소만 정하면 끝! 아래 가이드를 참고하세요.
         </p>
       </div>
 
@@ -175,7 +175,6 @@ export default function NewRoomPage() {
               value={form.kakaoOpenChatUrl}
               onChange={onChange}
             />
-            {/* ✅ “1시간 전 공개” 문구 제거 */}
           </label>
         </div>
 
@@ -196,6 +195,10 @@ export default function NewRoomPage() {
             {submitting ? '생성 중…' : '방 생성'}
           </button>
           <span style={{ color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</span>
+        </div>
+
+        <div style={{ marginTop: 8 }}>
+          <a href="/" style={{ textDecoration:'none', color:'#111', fontWeight:700 }}>← 홈으로</a>
         </div>
       </form>
     </main>
