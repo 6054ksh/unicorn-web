@@ -20,30 +20,44 @@ export default function FloatingBell() {
   const [items, setItems] = useState<NotiItem[]>([]);
   const [loading, setLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const toggle = () => setOpen(v => !v);
 
-  useEffect(() => {
-    if (!open) return;
-    let aborted = false;
-    (async () => {
-      try {
-        setLoading(true);
-        const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET' });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) { setItems([]); setCount(0); return; }
-        if (aborted) return;
-        const arr: NotiItem[] = Array.isArray(j?.notifications) ? j.notifications : [];
-        const unreadCount = Number(j?.unreadCount || 0);
-        setItems(arr);
-        setCount(unreadCount);
-      } finally {
-        if (!aborted) setLoading(false);
+  // 목록 불러오기
+  const fetchList = async () => {
+    try {
+      setLoading(true);
+      const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET' });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setItems([]);
+        setCount(0);
+        return;
       }
-    })();
-    return () => { aborted = true; };
+      const arr: NotiItem[] = Array.isArray(j?.notifications) ? j.notifications : [];
+      const unreadCount = Number(j?.unreadCount || 0);
+      setItems(arr);
+      setCount(unreadCount);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 패널 열릴 때 가져오고, 열려 있는 동안 15초마다 갱신 (가벼운 폴링)
+  useEffect(() => {
+    if (!open) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+      return;
+    }
+    let aborted = false;
+    (async () => { if (!aborted) await fetchList(); })();
+    pollRef.current = setInterval(fetchList, 15000);
+    return () => { aborted = true; if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; };
   }, [open]);
 
+  // 패널 바깥 클릭/ESC 닫기
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
@@ -63,9 +77,14 @@ export default function FloatingBell() {
   const markAllRead = async () => {
     try {
       await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
-      setItems(prev => prev.map(n => ({ ...n, unread: n.scope === 'user' ? false : n.unread })));
+      // 1) 낙관적 업데이트
+      setItems(prev => prev.map(n => ({ ...n, unread: false })));
       setCount(0);
-    } catch {}
+      // 2) 서버와 재동기화 (신뢰도 ↑)
+      await fetchList();
+    } catch {
+      // 실패 시엔 기존 상태 유지
+    }
   };
 
   const time = (iso?: string) => {
@@ -152,7 +171,8 @@ export default function FloatingBell() {
       >
         <div style={{ padding: 12, borderBottom: '1px solid #f1f3f6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <strong>알림</strong>
-          <button onClick={markAllRead}
+          <button
+            onClick={markAllRead}
             style={{ fontSize: 12, padding: '4px 8px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}>
             모두 읽음
           </button>
