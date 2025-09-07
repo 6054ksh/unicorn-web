@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { doc, getDoc } from 'firebase/firestore';
 import { firebaseApp } from '@/lib/firebase';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import {
@@ -16,7 +15,7 @@ import {
   getDocs,
   documentId,
 } from 'firebase/firestore';
-import { authedFetch } from '@/lib/authedFetch';
+import NotificationBell from '@/components/NotifyBell';
 
 type Room = {
   id: string;
@@ -37,9 +36,6 @@ export default function HomePage() {
   const [uid, setUid] = useState<string | null>(null);
   const [myRooms, setMyRooms] = useState<Room[]>([]);
   const [users, setUsers] = useState<Record<string, UserMeta>>({});
-  const [voteMap, setVoteMap] = useState<Record<string, { thumbsForUid: string; heartForUid: string; noshowUid: string }>>({});
-  const [msg, setMsg] = useState('');
-  const [votedMap, setVotedMap] = useState<Record<string, boolean>>({});
 
   const auth = useMemo(() => getAuth(firebaseApp), []);
   const db = useMemo(() => getFirestore(firebaseApp), []);
@@ -74,22 +70,7 @@ export default function HomePage() {
       list.sort((a, b) => String(b.startAt).localeCompare(String(a.startAt)));
       setMyRooms(list);
 
-useEffect(() => {
-  (async () => {
-    if (!uid || !myRooms.length) { setVotedMap({}); return; }
-    const db = getFirestore(firebaseApp);
-    const map: Record<string, boolean> = {};
-    for (const r of myRooms) {
-      try {
-        const vsnap = await getDoc(doc(db, 'rooms', r.id, 'votes', uid));
-        map[r.id] = vsnap.exists();
-      } catch { map[r.id] = false; }
-    }
-    setVotedMap(map);
-  })();
-}, [uid, myRooms]);
-
-      // 참가자 이름/이미지
+      // 참가자 이름/이미지(최대 120명 정도까지 안전)
       const ids = Array.from(new Set(list.flatMap((r) => r.participants || [])));
       if (ids.length) {
         const chunks: string[][] = [];
@@ -134,33 +115,6 @@ useEffect(() => {
     if (r.closed) return '종료';
     if (now >= new Date(r.startAt).getTime()) return '진행중';
     return '모집중';
-  };
-
-  const within24hAfterEnd = (r: Room) => {
-    const now = Date.now();
-    const end = new Date(r.endAt).getTime();
-    return now >= end && now < end + 24 * 60 * 60 * 1000;
-  };
-
-  const submitVote = async (roomId: string) => {
-    const v = voteMap[roomId] || { thumbsForUid: '', heartForUid: '', noshowUid: 'none' };
-    setMsg('투표 전송 중…');
-    try {
-      const res = await authedFetch('/api/rooms/vote', {
-        method: 'POST',
-        body: JSON.stringify({
-          roomId,
-          thumbsForUid: v.thumbsForUid || null,
-          heartForUid: v.heartForUid || null,
-          noshowUid: v.noshowUid || 'none',
-        }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || 'vote failed');
-      setMsg('✅ 투표 완료');
-    } catch (e: any) {
-      setMsg('❌ ' + (e?.message ?? String(e)));
-    }
   };
 
   // 스타일
@@ -243,69 +197,6 @@ useEffect(() => {
                       <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
                         장소: {r.location} · 시간: {new Date(r.startAt).toLocaleString()} ~ {new Date(r.endAt).toLocaleString()}
                       </div>
-
-                      {/* 종료 후 24h 투표 */}
-                      {within24hAfterEnd(r) ? (
-                        <div style={{ marginTop: 10, borderTop: '1px dashed #eee', paddingTop: 10 }}>
-                          <div style={{ fontWeight: 700, marginBottom: 6 }}>모임 투표</div>
-
-                          <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
-                            <label style={{ display: 'grid', gap: 4 }}>
-                              <span>👍 따봉 줄 사람</span>
-                              <select
-                                value={voteMap[r.id]?.thumbsForUid || ''}
-                                onChange={(e) =>
-                                  setVoteMap((s) => ({ ...s, [r.id]: { ...(s[r.id] || { heartForUid: '', noshowUid: 'none' }), thumbsForUid: e.target.value } }))
-                                }
-                              >
-                                <option value="">선택 안 함</option>
-                                {(r.participants || []).map((u) => (
-                                  <option key={u} value={u}>{users[u]?.name || u}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label style={{ display: 'grid', gap: 4 }}>
-                              <span>❤️ 하트 줄 사람</span>
-                              <select
-                                value={voteMap[r.id]?.heartForUid || ''}
-                                onChange={(e) =>
-                                  setVoteMap((s) => ({ ...s, [r.id]: { ...(s[r.id] || { thumbsForUid: '', noshowUid: 'none' }), heartForUid: e.target.value } }))
-                                }
-                              >
-                                <option value="">선택 안 함</option>
-                                {(r.participants || []).map((u) => (
-                                  <option key={u} value={u}>{users[u]?.name || u}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label style={{ display: 'grid', gap: 4 }}>
-                              <span>🚫 노쇼 투표</span>
-                              <select
-                                value={voteMap[r.id]?.noshowUid || 'none'}
-                                onChange={(e) =>
-                                  setVoteMap((s) => ({ ...s, [r.id]: { ...(s[r.id] || { thumbsForUid: '', heartForUid: '' }), noshowUid: e.target.value } }))
-                                }
-                              >
-                                <option value="none">노쇼자 없음</option>
-                                {(r.participants || []).map((u) => (
-                                  <option key={u} value={u}>{users[u]?.name || u}</option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <div>
-                              <button
-                                onClick={() => submitVote(r.id)}
-                                style={{ padding: '8px 12px', borderRadius: 8, background: '#111', color: '#fff', border: '1px solid #111' }}
-                              >
-                                투표하기
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -335,10 +226,11 @@ useEffect(() => {
             <a href="/notifications/enable" style={smallCard('#FFF7ED', '#9A3412')}>알림 설정</a>
             <a href="/feedback" style={smallCard('#FFF1F2', '#9D174D')}>방명록</a>
           </div>
-
-          <p style={{ marginTop: 12, color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</p>
         </div>
       </section>
+
+      {/* 좌하단 벨 */}
+      <NotificationBell />
     </main>
   );
 }

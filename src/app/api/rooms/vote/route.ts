@@ -1,10 +1,5 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
-import * as admin from 'firebase-admin';
 
 function httpError(message: string, status = 400) {
   const e: any = new Error(message);
@@ -12,107 +7,95 @@ function httpError(message: string, status = 400) {
   return e;
 }
 
-/**
- * 요청: { roomId, thumbsForUid|null, heartForUid|null, noshowUid: 'none'|uid }
- * 정책:
- *  - 사용자별 해당 room 투표는 1회만 허용
- *  - thumbs/heart는 해당 사용자 점수 +1씩 누적(원하시면 가중치 바꾸세요)
- *  - noshowUid는 -20점 (또는 규칙대로)
- */
 export async function POST(req: Request) {
   try {
-    const auth = getAdminAuth();
+    const adminAuth = getAdminAuth();
     const db = getAdminDb();
 
+    // 인증
     const authHeader = req.headers.get('authorization') || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    const { uid } = await auth.verifyIdToken(idToken);
+    if (!idToken) throw httpError('unauthorized', 401);
+    const { uid } = await adminAuth.verifyIdToken(idToken);
 
     const body = await req.json();
     const roomId = String(body?.roomId || '').trim();
-    const thumbsForUid = (body?.thumbsForUid && String(body.thumbsForUid)) || null;
-    const heartForUid = (body?.heartForUid && String(body.heartForUid)) || null;
-    const noshowUid = String(body?.noshowUid || 'none');
-
     if (!roomId) throw httpError('roomId required', 400);
+
+    const thumbsForUid = body?.thumbsForUid ? String(body.thumbsForUid) : null;
+    const heartForUid  = body?.heartForUid  ? String(body.heartForUid)  : null;
+    const noshowUid    = body?.noshowUid    ? String(body.noshowUid)    : 'none';
 
     const roomRef = db.collection('rooms').doc(roomId);
     const voteRef = roomRef.collection('votes').doc(uid);
 
-    // 이미 투표했는지 확인
-    const vsnap = await voteRef.get();
-    if (vsnap.exists) {
-      return NextResponse.json({ ok: true, already: true });
-    }
-
-    // 방 검증/상태 체크
-    const rsnap = await roomRef.get();
-    if (!rsnap.exists) throw httpError('room-not-found', 404);
-    const rdata = rsnap.data() as any;
-
-    const now = new Date();
-    const ended = rdata?.endAt ? now >= new Date(rdata.endAt) : false;
-    if (!ended) throw httpError('room-not-ended', 400); // 종료 이후만 투표 허용(요구사항)
-
-    // 참가자인지 확인(옵션)
-    const participants: string[] = Array.isArray(rdata?.participants) ? rdata.participants : [];
+    // 1) 방 로드 + 유효성
+    const rs = await roomRef.get();
+    if (!rs.exists) throw httpError('room-not-found', 404);
+    const r = rs.data() as any;
+    const participants: string[] = Array.isArray(r?.participants) ? r.participants : [];
     if (!participants.includes(uid)) throw httpError('not-a-participant', 403);
 
-    // 점수 반영 트랜잭션
-    await db.runTransaction(async (tx) => {
-      // 한 번 더 존재 확인(경합 방지)
-      const check = await tx.get(voteRef);
-      if (check.exists) throw httpError('already-voted', 409);
+    // 투표 가능 시간: 종료 후 24시간
+    const now = new Date();
+    const endAt = r?.endAt ? new Date(r.endAt) : null;
+    if (!endAt) throw httpError('invalid-room-endAt', 400);
+    if (now < endAt) throw httpError('vote-after-end-only', 400);
+    if (now.getTime() > endAt.getTime() + 24 * 60 * 60 * 1000) throw httpError('vote-window-closed', 400);
 
-      // 투표 저장
+    // 2) 1회성 보장
+    const vs = await voteRef.get();
+    if (vs.exists) throw httpError('already-voted', 409);
+
+    // 대상자 유효성(참여자 중에 있어야 카운트)
+    const validThumb = thumbsForUid && participants.includes(thumbsForUid) ? thumbsForUid : null;
+    const validHeart = heartForUid  && participants.includes(heartForUid)  ? heartForUid  : null;
+    const validNoshow = noshowUid && noshowUid !== 'none' && participants.includes(noshowUid) ? noshowUid : 'none';
+
+    // 3) 트랜잭션: vote doc 생성 + 점수 카운트 증가
+    const nowIso = new Date().toISOString();
+    await db.runTransaction(async (tx) => {
+      // 다시 검사(경쟁 조건)
+      const exist = await tx.get(voteRef);
+      if (exist.exists) throw httpError('already-voted', 409);
+
       tx.set(voteRef, {
-        by: uid,
-        thumbsForUid,
-        heartForUid,
-        noshowUid,
-        submittedAt: now.toISOString(),
+        voterUid: uid,
+        roomId,
+        thumbsForUid: validThumb,
+        heartForUid: validHeart,
+        noshowUid: validNoshow || 'none',
+        createdAt: nowIso,
       });
 
-      // 점수 반영
-      const scores = db.collection('scores');
-
-      if (thumbsForUid) {
-        tx.set(
-          scores.doc(thumbsForUid),
-          {
-            total: admin.firestore.FieldValue.increment(1),
-            thumbsCount: admin.firestore.FieldValue.increment(1),
-            lastUpdatedAt: now.toISOString(),
-          },
-          { merge: true }
-        );
+      // 카운트
+      if (validThumb) {
+        const sref = db.collection('scores').doc(validThumb);
+        tx.set(sref, {
+          thumbsCount: (global as any).admin?.firestore?.FieldValue?.increment?.(1) ?? 1,
+        }, { merge: true });
       }
-      if (heartForUid) {
-        tx.set(
-          scores.doc(heartForUid),
-          {
-            total: admin.firestore.FieldValue.increment(1),
-            heartsCount: admin.firestore.FieldValue.increment(1),
-            lastUpdatedAt: now.toISOString(),
-          },
-          { merge: true }
-        );
-      }
-      if (noshowUid && noshowUid !== 'none') {
-        tx.set(
-          scores.doc(noshowUid),
-          {
-            total: admin.firestore.FieldValue.increment(-20),
-            lastUpdatedAt: now.toISOString(),
-          },
-          { merge: true }
-        );
+      if (validHeart) {
+        const sref = db.collection('scores').doc(validHeart);
+        tx.set(sref, {
+          heartsCount: (global as any).admin?.firestore?.FieldValue?.increment?.(1) ?? 1,
+        }, { merge: true });
       }
     });
 
+    // 4) 모두 투표했는지 체크 → 플래그
+    try {
+      const allVotes = await roomRef.collection('votes').get();
+      const votedUids = new Set(allVotes.docs.map(d => (d.data() as any)?.voterUid).filter(Boolean));
+      const everyoneVoted = participants.length > 0 && participants.every(u => votedUids.has(u));
+      if (everyoneVoted) {
+        await roomRef.set({ voteComplete: true }, { merge: true });
+      }
+    } catch {}
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? String(e) }, { status: e?.status ?? 500 });
+    const status = e?.status ?? 500;
+    return NextResponse.json({ error: e?.message ?? String(e) }, { status });
   }
 }
