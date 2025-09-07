@@ -1,6 +1,6 @@
 import Script from 'next/script';
 import FcmRegistrar from '@/components/FcmRegistrar';
-import TopHomeBar from '@/components/TopHomeBar';
+import NotifyBell from '@/components/NotifyBell';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -8,18 +8,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <Script
           src="https://t1.kakaocdn.net/kakao_js_sdk/2.7.6/kakao.min.js"
-          integrity="여기에_문서에서_복사한_SRI_값"
+          //integrity="여기에_문서에서_복사한_SRI_값"
           crossOrigin="anonymous"
           strategy="afterInteractive"
         />
       </head>
       <body>
-        <TopHomeBar />
         <FcmRegistrar />
+        <NotifyBell />
         {children}
       </body>
     </html>
   );
 }
-
-

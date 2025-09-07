@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   try {
     const auth = getAdminAuth();
     const db = getAdminDb();
-    const msging = getAdminMessaging();
+    const messaging = getAdminMessaging();
 
     // 인증
     const authHeader = req.headers.get('authorization') || '';
@@ -23,29 +23,28 @@ export async function POST(req: Request) {
     if (!idToken) throw httpError('unauthorized', 401);
     const { uid } = await auth.verifyIdToken(idToken);
 
-    // 페이로드
+    // 제목/본문 (사용자 입력 or 기본)
     let body: any = {};
     try { body = await req.json(); } catch {}
     const title = (body?.title || '테스트 알림').toString();
     const bodyText = (body?.body || 'UNIcorn 알림이 잘 오는지 확인해요!').toString();
 
-    // 내 fcmTokens
+    // 내 토큰
     const userSnap = await db.collection('users').doc(uid).get();
-    const arr: string[] = Array.isArray(userSnap.data()?.fcmTokens) ? userSnap.data()!.fcmTokens : [];
-    const tokens = arr.filter(Boolean);
+    const tokens: string[] = Array.isArray(userSnap.data()?.fcmTokens) ? userSnap.data()!.fcmTokens.filter(Boolean) : [];
     if (tokens.length === 0) throw httpError('no-tokens', 400);
 
-    const base = process.env.NEXT_PUBLIC_BASE_URL || `https://${process.env.VERCEL_URL || ''}` || '';
-    const link = base ? `${base}/` : '/';
+    const base = process.env.NEXT_PUBLIC_BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
+    const link = base || '/';
 
-    // 멀티캐스트(500개씩)
+    // 500개씩 멀티캐스트
     let success = 0, failure = 0;
     for (let i = 0; i < tokens.length; i += 500) {
       const chunk = tokens.slice(i, i + 500);
-      const res = await msging.sendEachForMulticast({
+      const res = await messaging.sendEachForMulticast({
         tokens: chunk,
         webpush: {
-          headers: { Urgency: 'high', TTL: '120' },
+          headers: { Urgency: 'high', TTL: '60' }, // 최대한 빠르게
           fcmOptions: { link },
           notification: { title, body: bodyText, tag: 'test-noti', renotify: true },
         },
@@ -65,10 +64,9 @@ export async function POST(req: Request) {
         }
       });
       if (bad.length) {
-        await db
-          .collection('users')
-          .doc(uid)
-          .update({ fcmTokens: (userSnap.data()?.fcmTokens || []).filter((t: string) => !bad.includes(t)) });
+        await db.collection('users').doc(uid).update({
+          fcmTokens: (userSnap.data()?.fcmTokens || []).filter((t: string) => !bad.includes(t)),
+        });
       }
     }
 
