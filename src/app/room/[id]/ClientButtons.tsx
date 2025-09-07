@@ -2,28 +2,32 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { authedFetch } from '@/lib/authedFetch';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { firebaseApp } from '@/lib/firebase';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 
 export default function ClientButtons({
   roomId,
   closed,
   startAt,
   endAt,
+  capacity,
+  participantsCount,
   participants,
 }: {
   roomId: string;
   closed: boolean;
   startAt: string;
   endAt: string;
-  participants?: string[];
+  capacity: number;
+  participantsCount: number;
+  participants: string[];
 }) {
   const [msg, setMsg] = useState('');
-  const [myUid, setMyUid] = useState<string | null>(null);
+  const [uid, setUid] = useState<string | null>(null);
 
   useEffect(() => {
     const auth = getAuth(firebaseApp);
-    const unsub = onAuthStateChanged(auth, (u) => setMyUid(u?.uid ?? null));
+    const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
     return () => unsub();
   }, []);
 
@@ -31,24 +35,34 @@ export default function ClientButtons({
   const isClosed = !!closed;
   const isStarted = now >= new Date(startAt);
   const isEnded = now >= new Date(endAt);
-  const amIJoined = useMemo(() => {
-    if (!myUid || !Array.isArray(participants)) return false;
-    return participants.includes(myUid);
-  }, [myUid, participants]);
+
+  const isParticipant = useMemo(() => {
+    if (!uid) return false;
+    return participants?.includes(uid);
+  }, [participants, uid]);
+
+  const isFull = useMemo(() => {
+    const cap = Math.max(0, Number(capacity || 0));
+    const joined = Math.max(0, Number(participantsCount || 0));
+    return cap > 0 && joined >= cap;
+  }, [capacity, participantsCount]);
 
   const canJoin = useMemo(() => {
+    if (!uid) return false;
     if (isClosed || isEnded) return false;
-    if (amIJoined) return false;
+    if (isParticipant) return false;
+    if (isFull) return false;
     return true;
-  }, [isClosed, isEnded, amIJoined]);
+  }, [uid, isClosed, isEnded, isParticipant, isFull]);
 
   const canLeave = useMemo(() => {
+    if (!uid) return false;
     if (isClosed || isEnded) return false;
-    if (!amIJoined) return false;
-    // 시작 이후 나가기 금지는 유지(정책)
+    if (!isParticipant) return false;
+    // 시작 후 나가기 금지 정책 유지
     if (isStarted) return false;
     return true;
-  }, [isClosed, isEnded, amIJoined, isStarted]);
+  }, [uid, isClosed, isEnded, isParticipant, isStarted]);
 
   const join = async () => {
     setMsg('참여 중…');

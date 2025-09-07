@@ -12,6 +12,7 @@ type Room = {
   title: string;
   location: string;
   capacity: number;
+  minCapacity?: number;
   startAt: string;
   endAt: string;
   revealAt?: string;
@@ -21,6 +22,7 @@ type Room = {
   type?: string;
   content?: string;
   kakaoOpenChatUrl?: string;
+  abortedUnderMin?: boolean;
 };
 
 async function getBaseUrl(): Promise<string> {
@@ -43,7 +45,6 @@ async function fetchRoom(id: string): Promise<Room | null> {
   return j.room as Room;
 }
 
-// ✅ 서울 타임존으로 일관되게 보여주기
 function humanKST(iso?: string) {
   if (!iso) return '-';
   try {
@@ -67,10 +68,12 @@ export default async function RoomDetailPage(
   if (!room) notFound();
 
   const ClientButtons = (await import('./ClientButtons')).default;
+  const ParticipantsClient = (await import('./ParticipantsClient')).default;
+
   const pct = room.capacity ? Math.min(100, Math.round(((room.participantsCount || 0) / room.capacity) * 100)) : 0;
 
   return (
-    <main style={{ padding: 24, maxWidth: 920, margin: '0 auto' }}>
+    <main style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
       <div style={{
         border:'2px solid #c7d2fe',
         background:'#eef2ff',
@@ -80,16 +83,18 @@ export default async function RoomDetailPage(
           <h1 style={{ margin:0, fontSize:22 }}>{room.title}</h1>
           <span style={{
             fontSize:12, padding:'2px 8px', borderRadius:999,
-            border:'1px solid #ddd', background: room.closed ? '#f3f4f6' : '#e6f4ea',
-            color: room.closed ? '#374151' : '#166534'
+            border:'1px solid #ddd',
+            background: room.abortedUnderMin ? '#fff7ed' : room.closed ? '#f3f4f6' : '#e6f4ea',
+            color: room.abortedUnderMin ? '#9a3412' : room.closed ? '#374151' : '#166534'
           }}>
-            {room.closed ? '종료됨' : '진행/예정'}
+            {room.abortedUnderMin ? '최소인원 미달 취소' : (room.closed ? '종료됨' : '진행/예정')}
           </span>
         </div>
 
         <div style={{ color:'#444', marginTop:8, lineHeight:1.6 }}>
           <div>장소: <b>{room.location}</b></div>
           <div>시간: <b>{humanKST(room.startAt)}</b> ~ <b>{humanKST(room.endAt)}</b></div>
+          <div>정원: <b>최소 {room.minCapacity ?? 0}명</b> / <b>최대 {room.capacity ?? 0}명</b></div>
           {room.type ? <div>종류: {room.type}</div> : null}
           {room.content ? <div>내용: {room.content}</div> : null}
           {room.kakaoOpenChatUrl ? (
@@ -116,16 +121,25 @@ export default async function RoomDetailPage(
           </div>
         </div>
 
+        {/* 참여 / 나가기 버튼 */}
         <div style={{ marginTop:14 }}>
           <ClientButtons
             roomId={room.id}
             closed={!!room.closed}
             startAt={room.startAt}
             endAt={room.endAt}
+            capacity={room.capacity}
+            participantsCount={room.participantsCount || (room.participants?.length ?? 0)}
             participants={room.participants || []}
           />
         </div>
       </div>
+
+      {/* 참여자 목록 */}
+      <section style={{ marginTop:16 }}>
+        <h2 style={{ fontSize:16, margin:'0 0 8px' }}>참여자</h2>
+        <ParticipantsClient uids={room.participants || []} />
+      </section>
 
       <div style={{ marginTop: 16 }}>
         <a href="/" style={{ textDecoration:'none', color:'#111', fontWeight:700 }}>← 홈으로</a>

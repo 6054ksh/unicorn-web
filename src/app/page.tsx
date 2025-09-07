@@ -15,7 +15,7 @@ import {
   getDocs,
   documentId,
 } from 'firebase/firestore';
-import NotificationBell from '@/components/NotifyBell';
+
 
 type Room = {
   id: string;
@@ -229,8 +229,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* 좌하단 벨 */}
-      <NotificationBell />
     </main>
   );
 }
