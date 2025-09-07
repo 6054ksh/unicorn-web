@@ -11,21 +11,16 @@ import { authedFetch } from '@/lib/authedFetch';
 
 type Noti = {
   id: string;
-  type?: string;     // 'vote-request' | 'room-created' | 'joined' | 'under-min-closed' 등
+  type?: string;
   title?: string;
   body?: string;
   url?: string;
   unread?: boolean;
-  createdAt?: string; // ISO
-  roomId?: string;    // vote-request 등에 필요
+  createdAt?: string;
+  roomId?: string;
 };
 
-type RoomDoc = {
-  id: string;
-  title: string;
-  participants?: string[];
-};
-
+type RoomDoc = { id: string; title: string; participants?: string[] };
 type UserMeta = { uid: string; name?: string; profileImage?: string };
 
 export default function NotificationBell() {
@@ -38,7 +33,7 @@ export default function NotificationBell() {
   const db = useMemo(() => getFirestore(firebaseApp), []);
   const unsubRef = useRef<null | (() => void)>(null);
 
-  // 투표폼용 캐시: roomId -> { room, users }
+  // roomId -> { room, users }
   const [roomCache, setRoomCache] = useState<Record<string, { room: RoomDoc; users: Record<string, UserMeta> }>>({});
 
   useEffect(() => {
@@ -59,14 +54,8 @@ export default function NotificationBell() {
       snap.forEach(d => {
         const v = d.data() as any;
         arr.push({
-          id: d.id,
-          type: v?.type,
-          title: v?.title,
-          body: v?.body,
-          url: v?.url,
-          unread: v?.unread ?? true,
-          createdAt: v?.createdAt,
-          roomId: v?.roomId,
+          id: d.id, type: v?.type, title: v?.title, body: v?.body, url: v?.url,
+          unread: v?.unread ?? true, createdAt: v?.createdAt, roomId: v?.roomId,
         });
       });
       setNotis(arr);
@@ -76,22 +65,24 @@ export default function NotificationBell() {
     return () => { if (unsubRef.current) unsubRef.current(); unsubRef.current = null; };
   }, [db, uid]);
 
-  // roomId가 있는 vote-request 알림이 보이면, 그 방과 참가자 "이름"을 캐시
+  // vote-request 표시 시 방/참여자 이름 캐시
   useEffect(() => {
     (async () => {
       const targets = notis.filter(n => n.type === 'vote-request' && n.roomId && !roomCache[n.roomId]);
       if (!targets.length) return;
 
-      const newCache: Record<string, { room: RoomDoc; users: Record<string, UserMeta> }> = {};
+      const fresh: Record<string, { room: RoomDoc; users: Record<string, UserMeta> }> = {};
       for (const n of targets) {
         const roomId = n.roomId!;
-        // room doc
         const rSnap = await getDoc(doc(db, 'rooms', roomId));
         if (!rSnap.exists()) continue;
         const rv = rSnap.data() as any;
-        const room: RoomDoc = { id: rSnap.id, title: rv?.title || '(제목없음)', participants: Array.isArray(rv?.participants) ? rv.participants : [] };
+        const room: RoomDoc = {
+          id: rSnap.id,
+          title: rv?.title || '(제목없음)',
+          participants: Array.isArray(rv?.participants) ? rv.participants : []
+        };
 
-        // fetch users meta by chunks
         const ids = room.participants || [];
         const usersMap: Record<string, UserMeta> = {};
         for (let i = 0; i < ids.length; i += 10) {
@@ -100,19 +91,13 @@ export default function NotificationBell() {
           const uS = await getDocs(uQ);
           uS.forEach(d => {
             const vv = d.data() as any;
-            usersMap[d.id] = {
-              uid: d.id,
-              name: vv?.name || '(이름없음)',
-              profileImage: vv?.profileImage || '',
-            };
+            usersMap[d.id] = { uid: d.id, name: vv?.name || '(이름없음)', profileImage: vv?.profileImage || '' };
           });
         }
 
-        newCache[roomId] = { room, users: usersMap };
+        fresh[roomId] = { room, users: usersMap };
       }
-      if (Object.keys(newCache).length) {
-        setRoomCache(prev => ({ ...prev, ...newCache }));
-      }
+      if (Object.keys(fresh).length) setRoomCache(prev => ({ ...prev, ...fresh }));
     })();
   }, [db, notis, roomCache]);
 
@@ -125,26 +110,30 @@ export default function NotificationBell() {
     });
   };
 
+  const clearAll = async () => {
+    await authedFetch('/api/me/notifications/clear', { method: 'POST' });
+    // onSnapshot이 비워진 목록을 곧 가져옵니다.
+  };
+
   // 투표 제출
-  const submitVote = async (notif: Noti, thumbsForUid: string | '', heartForUid: string | '', noshowUid: string | 'none') => {
-    if (!notif.roomId) return;
+  const submitVote = async (n: Noti, thumbsForUid: string | '', heartForUid: string | '', noshowUid: string | 'none') => {
+    if (!n.roomId) return;
     try {
       const res = await authedFetch('/api/rooms/vote', {
         method: 'POST',
         body: JSON.stringify({
-          roomId: notif.roomId,
+          roomId: n.roomId,
           thumbsForUid: thumbsForUid || null,
           heartForUid: heartForUid || null,
           noshowUid: noshowUid || 'none',
         }),
       });
-      // 이미 투표했으면 409가 올 수 있음 → 폼은 숨기고 알림은 정리
       if (!res.ok && res.status !== 409) {
         const j = await res.json().catch(() => ({}));
         alert('투표 실패: ' + (j?.error || res.statusText));
         return;
       }
-      await ack(notif.id, 'delete'); // 제출되면 알림 제거
+      await ack(n.id, 'delete'); // 제출되면 알림 제거
     } catch (e: any) {
       alert('투표 실패: ' + (e?.message ?? String(e)));
     }
@@ -156,7 +145,7 @@ export default function NotificationBell() {
     const [noshow, setNoshow] = useState<'none' | string>('none');
 
     const info = n.roomId ? roomCache[n.roomId] : undefined;
-    const nameOf = (u: string) => info?.users[u]?.name || u; // 항상 이름 우선, 없으면 UID
+    const nameOf = (u: string) => info?.users[u]?.name || u;
 
     return (
       <div style={{ border: '1px solid #eee', borderRadius: 10, padding: 10, background: '#fff' }}>
@@ -164,7 +153,6 @@ export default function NotificationBell() {
         <div style={{ fontSize: 13, color: '#555', marginBottom: 8 }}>
           {n.body || '참여했던 모임! 따봉/하트/노쇼를 한 번만 투표할 수 있어요.'}
         </div>
-
         <div style={{ display: 'grid', gap: 8 }}>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>👍 따봉 줄 사람</span>
@@ -175,7 +163,6 @@ export default function NotificationBell() {
               ))}
             </select>
           </label>
-
           <label style={{ display: 'grid', gap: 4 }}>
             <span>❤️ 하트 줄 사람</span>
             <select value={heart} onChange={e => setHeart(e.target.value)}>
@@ -185,7 +172,6 @@ export default function NotificationBell() {
               ))}
             </select>
           </label>
-
           <label style={{ display: 'grid', gap: 4 }}>
             <span>🚫 노쇼 투표</span>
             <select value={noshow} onChange={e => setNoshow(e.target.value as any)}>
@@ -195,7 +181,6 @@ export default function NotificationBell() {
               ))}
             </select>
           </label>
-
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={() => submitVote(n, thumbs, heart, noshow)}
@@ -220,8 +205,6 @@ export default function NotificationBell() {
 
   const Item: React.FC<{ n: Noti }> = ({ n }) => {
     if (n.type === 'vote-request') return <VoteCard n={n} />;
-
-    // 일반 알림 카드
     return (
       <div style={{ border: '1px solid #eee', borderRadius: 10, padding: 10, background: '#fff' }}>
         <div style={{ fontWeight: 800 }}>{n.title || '알림'}</div>
@@ -242,7 +225,7 @@ export default function NotificationBell() {
 
   return (
     <>
-      {/* 좌하단 토글 버튼 */}
+      {/* 좌하단 토글 버튼 (항상 같은 자리) */}
       <div style={{ position: 'fixed', left: 16, bottom: 16, zIndex: 50 }}>
         <button
           onClick={() => setOpen(s => !s)}
@@ -253,9 +236,7 @@ export default function NotificationBell() {
           aria-label="알림"
           title="알림"
         >
-          {/* Bell icon */}
           <span style={{ fontSize: 24 }}>🔔</span>
-          {/* 배지 */}
           {uid && unreadCount > 0 ? (
             <span style={{
               position: 'absolute', right: -4, top: -4, background: '#ef4444', color: '#fff',
@@ -267,7 +248,7 @@ export default function NotificationBell() {
         </button>
       </div>
 
-      {/* 패널 */}
+      {/* 패널 (버튼을 덮지 않도록 bottom:80 유지) */}
       {open && (
         <div
           style={{
@@ -278,9 +259,14 @@ export default function NotificationBell() {
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <b>알림</b>
-            <button onClick={() => setOpen(false)} style={{ border: '1px solid #ddd', borderRadius: 8, padding: '4px 8px' }}>
-              닫기
-            </button>
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={clearAll} style={{ border: '1px solid #ddd', borderRadius: 8, padding: '4px 8px' }}>
+                모두 지우기
+              </button>
+              <button onClick={() => setOpen(false)} style={{ border: '1px solid #ddd', borderRadius: 8, padding: '4px 8px' }}>
+                닫기
+              </button>
+            </div>
           </div>
 
           {!uid ? (
@@ -291,7 +277,6 @@ export default function NotificationBell() {
             <div style={{ color: '#666', fontSize: 13 }}>새 알림이 없어요.</div>
           ) : (
             <div style={{ display: 'grid', gap: 10 }}>
-              {/* 투표 알림 우선 정렬: type === 'vote-request' 먼저 나오게 */}
               {notis
                 .slice()
                 .sort((a, b) => (a.type === 'vote-request' ? -1 : 0) - (b.type === 'vote-request' ? -1 : 0))
