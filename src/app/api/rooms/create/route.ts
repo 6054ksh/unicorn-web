@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
+import * as admin from 'firebase-admin';
+import { pushGlobal } from '@/lib/server/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,9 @@ export async function POST(req: Request) {
   try {
     const auth = getAdminAuth();
     const db = getAdminDb();
+    const messaging = getAdminMessaging();
 
+    // 인증
     const authHeader = req.headers.get('authorization') || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (!idToken) throw httpError('unauthorized', 401);
@@ -27,8 +30,8 @@ export async function POST(req: Request) {
     const location = String(body?.location || '').trim();
     const capacity = Number(body?.capacity ?? 0);
     const minCapacity = Number(body?.minCapacity ?? 0);
-    const startAtIso = String(body?.startAt || '').trim();
-    const endAtIso = body?.endAt ? String(body.endAt).trim() : ''; // 선택
+    const startAtIso = String(body?.startAt || '').trim(); // ISO
+    const endAtIso = String(body?.endAt || '').trim();     // ISO (옵션, 없으면 +5h)
     const kakaoOpenChatUrl = (body?.kakaoOpenChatUrl ? String(body.kakaoOpenChatUrl).trim() : '') || null;
     const type = String(body?.type || '').trim();
     const content = String(body?.content || '').trim();
@@ -48,31 +51,37 @@ export async function POST(req: Request) {
     const startAt = new Date(startAtIso);
     if (isNaN(startAt.getTime())) throw httpError('invalid startAt', 400);
 
-    // (선택) 사용자가 지정한 endAt 지원, 없으면 +5시간
-    let endAt = endAtIso ? new Date(endAtIso) : new Date(startAt.getTime() + 5 * 60 * 60 * 1000);
+    const endAt = endAtIso
+      ? new Date(endAtIso)
+      : new Date(startAt.getTime() + 5 * 60 * 60 * 1000);
     if (isNaN(endAt.getTime())) throw httpError('invalid endAt', 400);
-    if (endAt <= startAt) throw httpError('endAt must be after startAt', 400);
 
-    // 하루 1회 개설 제한 (admin 제외)
-    const adminDoc = await db.collection('admins').doc(uid).get();
-    const isAdmin = adminDoc.exists && !!adminDoc.data()?.isAdmin;
+    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000); // 그대로 유지(표시 정책은 UI에서)
+
+    // ---- 하루 1회 개설 제한 (관리자는 예외) ----
+    const adminSnap = await db.collection('admins').doc(uid).get();
+    const isAdmin = adminSnap.exists && !!adminSnap.data()?.isAdmin;
+
     if (!isAdmin) {
       const cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       let blocked = false;
       try {
-        const qs = await db.collection('rooms')
+        const qs = await db
+          .collection('rooms')
           .where('creatorUid', '==', uid)
           .orderBy('createdAt', 'desc')
           .limit(1)
           .get();
         const last = qs.docs[0];
-        const lastCreatedAt = last?.data()?.createdAt as string | undefined;
-        if (lastCreatedAt && lastCreatedAt >= cutoffIso) blocked = true;
+        if (last) {
+          const lastCreatedAt = (last.data() as any).createdAt as string | undefined;
+          if (lastCreatedAt && lastCreatedAt >= cutoffIso) blocked = true;
+        }
       } catch {
         const qs = await db.collection('rooms').where('creatorUid', '==', uid).get();
         const arr = qs.docs
-          .map(d => d.data() as any)
-          .filter(x => x?.createdAt)
+          .map((d) => d.data() as any)
+          .filter((x) => x?.createdAt)
           .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
         const last = arr[0];
         if (last && last.createdAt >= cutoffIso) blocked = true;
@@ -86,10 +95,8 @@ export async function POST(req: Request) {
     }
 
     const nowIso = new Date().toISOString();
-    // ✅ 생성자 자동 참여
-    const participants = [uid];
-
-    const docRef = await db.collection('rooms').add({
+    // 생성자 자동 참여
+    const data = {
       title,
       titleLower: title.toLowerCase(),
       type: type || null,
@@ -99,29 +106,44 @@ export async function POST(req: Request) {
       minCapacity,
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
-      revealAt: new Date(startAt.getTime() - 60 * 60 * 1000).toISOString(),
+      revealAt: revealAt.toISOString(),
       kakaoOpenChatUrl,
       creatorUid: uid,
-      participants,
-      participantsCount: participants.length,
+      participants: [uid],
+      participantsCount: 1,
       closed: false,
       createdAt: nowIso,
       updatedAt: nowIso,
-      voteOpen: false,
-      voteDoneUids: [],
+    };
+
+    const ref = await db.collection('rooms').add(data);
+
+    // 점수(+30 / 정원≥8:+40) - 생성자
+    const plus = 30 + (capacity >= 8 ? 40 : 0);
+    await db
+      .collection('scores')
+      .doc(uid)
+      .set(
+        {
+          total: admin.firestore.FieldValue.increment(plus),
+          createdRooms: admin.firestore.FieldValue.increment(1),
+          lastUpdatedAt: nowIso,
+        },
+        { merge: true }
+      );
+
+    // --- 글로벌 알림(벨 패널용) ---
+    await pushGlobal({
+      type: 'room-created',
+      title: '새로운 모임이 추가되었습니다! 🎉',
+      body: `『${title}』 — ${location} / 정원 ${capacity}명`,
+      url: `/room/${ref.id}`,
     });
 
-    // 점수(+30 / 정원≥8:+40)
-    const plus = 30 + (capacity >= 8 ? 40 : 0);
-    await db.collection('scores').doc(uid).set({
-      total: FieldValue.increment(plus),
-      createdRooms: FieldValue.increment(1),
-      lastUpdatedAt: nowIso,
-    }, { merge: true });
+    // --- (선택) 빠른 FCM 브로드캐스트: 기존 로직 유지 시 여기서 사용 ---
+    //  이미 구현돼 있다면 생략 가능. 필요하면 tokens 수집 → sendEachForMulticast.
 
-    // (알림 전파 등은 기존 로직 유지)
-
-    return NextResponse.json({ ok: true, id: docRef.id });
+    return NextResponse.json({ ok: true, id: ref.id });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? String(e) },

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { doc, getDoc } from 'firebase/firestore';
 import { firebaseApp } from '@/lib/firebase';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import {
@@ -38,6 +39,7 @@ export default function HomePage() {
   const [users, setUsers] = useState<Record<string, UserMeta>>({});
   const [voteMap, setVoteMap] = useState<Record<string, { thumbsForUid: string; heartForUid: string; noshowUid: string }>>({});
   const [msg, setMsg] = useState('');
+  const [votedMap, setVotedMap] = useState<Record<string, boolean>>({});
 
   const auth = useMemo(() => getAuth(firebaseApp), []);
   const db = useMemo(() => getFirestore(firebaseApp), []);
@@ -71,6 +73,21 @@ export default function HomePage() {
       // 최신순
       list.sort((a, b) => String(b.startAt).localeCompare(String(a.startAt)));
       setMyRooms(list);
+
+useEffect(() => {
+  (async () => {
+    if (!uid || !myRooms.length) { setVotedMap({}); return; }
+    const db = getFirestore(firebaseApp);
+    const map: Record<string, boolean> = {};
+    for (const r of myRooms) {
+      try {
+        const vsnap = await getDoc(doc(db, 'rooms', r.id, 'votes', uid));
+        map[r.id] = vsnap.exists();
+      } catch { map[r.id] = false; }
+    }
+    setVotedMap(map);
+  })();
+}, [uid, myRooms]);
 
       // 참가자 이름/이미지
       const ids = Array.from(new Set(list.flatMap((r) => r.participants || [])));
