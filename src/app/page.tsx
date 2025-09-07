@@ -16,8 +16,6 @@ import {
   documentId,
 } from 'firebase/firestore';
 import { authedFetch } from '@/lib/authedFetch';
-// ✅ 종(알림) UI 추가
-import NotificationBell from '@/components/NotifyBell';
 
 type Room = {
   id: string;
@@ -74,7 +72,7 @@ export default function HomePage() {
       list.sort((a, b) => String(b.startAt).localeCompare(String(a.startAt)));
       setMyRooms(list);
 
-      // 참가자 이름/이미지(최대 120명 정도까지 안전)
+      // 참가자 이름/이미지
       const ids = Array.from(new Set(list.flatMap((r) => r.participants || [])));
       if (ids.length) {
         const chunks: string[][] = [];
@@ -191,38 +189,6 @@ export default function HomePage() {
           </div>
           <h1 style={{ margin: '10px 0 6px', fontSize: 28, fontWeight: 900, letterSpacing: -0.2 }}>UNIcorn 🦄</h1>
           <p style={{ margin: 0, color: '#555', fontSize: 14 }}>가볍게 열고, 쉽게 참여해서 더 친해지기!</p>
-
-          {/* ✅ 우측 상단 홈 버튼 + 그 아래 종(알림) 카드 */}
-          <div style={{ marginTop: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Link
-                href="/"
-                style={{
-                  textDecoration: 'none',
-                  padding: '6px 12px',
-                  borderRadius: 999,
-                  border: '1px solid #e5e7eb',
-                  background: '#ffffffaa',
-                  backdropFilter: 'blur(4px)',
-                  fontWeight: 700,
-                  color: '#111'
-                }}
-              >
-                홈
-              </Link>
-            </div>
-            <div
-              style={{
-                marginTop: 8,
-                border: '1px solid #e8eaf0',
-                borderRadius: 12,
-                background: '#fff',
-                padding: '8px 12px',
-              }}
-            >
-              <NotificationBell />
-            </div>
-          </div>
         </div>
       </section>
 

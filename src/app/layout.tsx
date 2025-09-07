@@ -1,6 +1,7 @@
 // src/app/layout.tsx
 import Script from 'next/script';
 import FcmRegistrar from '@/components/FcmRegistrar';
+import GlobalQuickBar from '@/components/GlobalQuickBar';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -16,6 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body style={{ background:'#f9fafb', color:'#111' }}>
         <FcmRegistrar />
         {children}
+        <GlobalQuickBar />
       </body>
     </html>
   );
