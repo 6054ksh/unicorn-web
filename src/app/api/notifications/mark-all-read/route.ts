@@ -1,2 +1,10 @@
-// 기존 me 경로와 호환되도록 재사용
-export { POST, runtime, dynamic, revalidate } from '@/app/api/me/notifications/mark-all-read/route';
+// src/app/api/notifications/mark-all-read/route.ts
+import * as impl from '@/app/api/me/notifications/mark-all-read/route';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+export async function POST(req: Request) {
+  return impl.POST(req);
+}
