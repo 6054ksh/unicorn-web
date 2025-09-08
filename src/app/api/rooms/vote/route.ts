@@ -1,6 +1,7 @@
+// src/app/api/rooms/vote/route.ts
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
-import admin from 'firebase-admin';
+import * as admin from 'firebase-admin';
 
 function httpError(message: string, status = 400) {
   const e: any = new Error(message);
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
 
     const thumbsForUid = body?.thumbsForUid ? String(body.thumbsForUid) : null;
     const heartForUid  = body?.heartForUid  ? String(body.heartForUid)  : null;
-    const noshowUidIn  = body?.noshowUid    ? String(body.noshowUid)    : 'none';
+    const noshowUid    = body?.noshowUid    ? String(body.noshowUid)    : 'none';
 
     const roomRef = db.collection('rooms').doc(roomId);
     const voteRef = roomRef.collection('votes').doc(uid);
@@ -51,9 +52,9 @@ export async function POST(req: Request) {
     // 대상자 유효성(참여자 중에 있어야 카운트)
     const validThumb = thumbsForUid && participants.includes(thumbsForUid) ? thumbsForUid : null;
     const validHeart = heartForUid  && participants.includes(heartForUid)  ? heartForUid  : null;
-    const validNoshow = noshowUidIn && noshowUidIn !== 'none' && participants.includes(noshowUidIn) ? noshowUidIn : 'none';
+    const validNoshow = noshowUid && noshowUid !== 'none' && participants.includes(noshowUid) ? noshowUid : 'none';
 
-    // 3) 트랜잭션: vote doc 생성 + 점수 카운트 증가 + 투표 카운터 증가
+    // 3) 트랜잭션: vote doc 생성 + 점수 카운트 증가
     const nowIso = new Date().toISOString();
     await db.runTransaction(async (tx) => {
       const exist = await tx.get(voteRef);
@@ -76,9 +77,6 @@ export async function POST(req: Request) {
         const sref = db.collection('scores').doc(validHeart);
         tx.set(sref, { heartsCount: admin.firestore.FieldValue.increment(1) }, { merge: true });
       }
-
-      // 투표 제출 카운트 증가
-      tx.set(roomRef, { votesSubmittedCount: admin.firestore.FieldValue.increment(1) }, { merge: true });
     });
 
     // 4) 모두 투표했는지 체크 → 플래그
@@ -87,7 +85,7 @@ export async function POST(req: Request) {
       const votedUids = new Set(allVotes.docs.map(d => (d.data() as any)?.voterUid).filter(Boolean));
       const everyoneVoted = participants.length > 0 && participants.every(u => votedUids.has(u));
       if (everyoneVoted) {
-        await roomRef.set({ voteComplete: true }, { merge: true });
+        await roomRef.set({ voteComplete: true, votingOpen: false, updatedAt: nowIso }, { merge: true });
       }
     } catch {}
 

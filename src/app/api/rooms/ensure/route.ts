@@ -97,19 +97,16 @@ export async function POST(req: Request) {
     const joined = Number(r?.participantsCount ?? participants.length ?? 0);
     const minCap = Number(r?.minCapacity ?? 0);
 
-    // 권한: 참여자/개설자/관리자만
+    // 권한 체크
     const allowed = participants.includes(uid) || r?.creatorUid === uid || await isAdmin(db, uid);
     if (!allowed) return bad('forbidden', 403);
 
-    // 이미 처리된 경우
-    if (r?.closed === true && (r?.votingOpen === true || r?.underMinClosedAt)) {
-      return NextResponse.json({ ok:true, noop:true });
-    }
+    // 이미 최종 완료면 종료
+    if (r?.voteComplete) return NextResponse.json({ ok:true, noop:true, state:'vote-complete' });
 
-    // A) 최소인원 미달: startAt 지났고 closed=false이고 인원부족
+    // A) 최소인원 미달
     if (startAt && now >= startAt && r?.closed !== true && minCap > 0 && joined < minCap) {
       const nowIso = isoNow();
-      // 상태 마킹
       await ref.set({
         closed: true,
         cancelledDueToMin: true,
@@ -126,17 +123,13 @@ export async function POST(req: Request) {
 
         await addUserNotiBoth(db, participants, { type: 'under-min-closed', title, body: bodyMsg, url, meta:{ roomId } });
 
-        // 푸시
         const { tokens, owners } = await fetchTokens(db, participants);
         for (let i=0;i<tokens.length;i+=500) {
           const chunk = tokens.slice(i, i+500);
           const res = await messaging.sendEachForMulticast({
             tokens: chunk,
-            webpush: {
-              headers: { Urgency: 'high', TTL: '120' },
-              fcmOptions: { link: url },
-              notification: { title, body: bodyMsg, tag: 'under-min-closed', renotify: true },
-            },
+            webpush: { headers: { Urgency: 'high', TTL: '120' }, fcmOptions: { link: url },
+              notification: { title, body: bodyMsg, tag: 'under-min-closed', renotify: true } },
             data: { url },
           });
           const bad: string[] = [];
@@ -151,11 +144,10 @@ export async function POST(req: Request) {
           if (bad.length) await removeBadTokens(db, bad, owners);
         }
       }
-
       return NextResponse.json({ ok:true, changed:'under-min-closed' });
     }
 
-    // B) 종료 → 투표중: endAt 지났고 closed=false
+    // B) 종료 → 투표중
     if (endAt && now >= endAt && r?.closed !== true) {
       const nowIso = isoNow();
       await ref.set({
@@ -177,11 +169,8 @@ export async function POST(req: Request) {
           const chunk = tokens.slice(i, i+500);
           const res = await messaging.sendEachForMulticast({
             tokens: chunk,
-            webpush: {
-              headers: { Urgency: 'high', TTL: '120' },
-              fcmOptions: { link: url },
-              notification: { title, body: bodyMsg, tag: 'vote-reminder', renotify: true },
-            },
+            webpush: { headers: { Urgency: 'high', TTL: '120' }, fcmOptions: { link: url },
+              notification: { title, body: bodyMsg, tag: 'vote-reminder', renotify: true } },
             data: { url },
           });
           const bad: string[] = [];
@@ -196,8 +185,21 @@ export async function POST(req: Request) {
           if (bad.length) await removeBadTokens(db, bad, owners);
         }
       }
+      // 계속 진행하여 C) 모두 투표완료 체크
+    }
 
-      return NextResponse.json({ ok:true, changed:'voting-open' });
+    // C) 모두 투표 완료 → 종료됨
+    const fresh = await ref.get();
+    const rr = fresh.data() as any;
+    const pids: string[] = Array.isArray(rr?.participants) ? rr.participants : [];
+    if (pids.length) {
+      const vs = await ref.collection('votes').get();
+      const votedCount = vs.size;
+      if (votedCount >= pids.length) {
+        const nowIso2 = isoNow();
+        await ref.set({ voteComplete: true, votingOpen: false, updatedAt: nowIso2 }, { merge: true });
+        return NextResponse.json({ ok:true, changed:'vote-complete' });
+      }
     }
 
     return NextResponse.json({ ok:true, noop:true });
