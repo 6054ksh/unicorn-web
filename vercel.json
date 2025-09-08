@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/tick",
-      "schedule": "*/5 * * * *"
+      "path": "/api/rooms/cron/sweep",   // ← 실제 라우트로 맞추는 걸 권장 (아래 참고)
+      "schedule": "0 0 * * *"            // 매일 00:00 UTC (KST 09:00)
     }
   ]
 }

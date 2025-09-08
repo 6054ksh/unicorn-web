@@ -3,6 +3,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 import { getAdminDb, getAdminAuth, getAdminMessaging } from '@/lib/firebaseAdmin';
 
+export { GET, POST } from '@/app/api/rooms/cron/sweep/route';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
