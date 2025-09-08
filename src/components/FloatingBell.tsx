@@ -31,7 +31,8 @@ export default function FloatingBell() {
     try {
       setLoading(true);
       // ✅ onlyUnread=1 제거 (인덱스 없이도 동작)
-      const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET' });
+const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET' });
+
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setItems([]); setCount(0); return; }
 
@@ -73,14 +74,15 @@ export default function FloatingBell() {
     return () => { document.removeEventListener('click', onDocClick, true); document.removeEventListener('keydown', onEsc); };
   }, [open]);
 
-  const markAllRead = async () => {
-    try {
-      await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
-      // 낙관적 업데이트 + 서버 재동기화
-      setItems([]); setCount(0);
-      await fetchList();
-    } catch {}
-  };
+  // markAllRead 내부만 이렇게 바꾸면 됩니다.
+const markAllRead = async () => {
+  try {
+    await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
+    // 바로 재동기화 (서버 신뢰)
+    await fetchList();
+  } catch {}
+};
+
 
   const time = (iso?: string) => { if (!iso) return ''; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
   // 읽음=false만 제외. (undefined, true는 보임) => 전역 공지도 표시됨

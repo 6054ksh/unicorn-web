@@ -18,12 +18,12 @@ type Room = {
   revealAt?: string;
   closed?: boolean;
   votingOpen?: boolean;
+  abortedUnderMin?: boolean;
   participantsCount?: number;
   participants?: string[];
   type?: string;
   content?: string;
   kakaoOpenChatUrl?: string;
-  abortedUnderMin?: boolean;
 };
 
 async function getBaseUrl(): Promise<string> {
@@ -49,14 +49,17 @@ async function fetchRoom(id: string): Promise<Room | null> {
 export default async function RoomDetailPage(
   props: { params: { id: string } } | { params: Promise<{ id: string }> }
 ) {
+  // Next.js 15에서 params가 Promise일 수 있어 두 케이스 모두 안전 처리
   const raw = (props as any).params;
   const { id } = typeof raw?.then === 'function' ? await raw : raw;
 
   const room = await fetchRoom(id);
   if (!room) notFound();
 
-  // ✅ 투표 UI+ensure가 들어있는 Client 컴포넌트로 렌더
+  // 상세 UI/상태(투표중 전환, 최소인원 미달 즉시 종료, 투표 UI 등)는
+  // Client 컴포넌트에서 처리 (중복 방지 및 유지보수성 향상)
   const Client = (await import('./Client')).default;
+
   return (
     <main style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
       <Client room={room} />

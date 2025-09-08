@@ -1,3 +1,4 @@
+// src/app/api/rooms/ensure/route.ts
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
 import * as admin from 'firebase-admin';
@@ -19,12 +20,12 @@ async function addUserNotifications(
   const batch = db.batch();
   for (const uid of uids) {
     if (!uid) continue;
-    // 최신 경로
-    const refA = db.collection('notifications').doc(uid).collection('items').doc();
-    batch.set(refA, { id: refA.id, scope: 'user', unread: true, createdAt: now, ...payload });
-    // 레거시 경로(호환)
-    const refB = db.collection('users').doc(uid).collection('notifications').doc(refA.id);
-    batch.set(refB, { id: refA.id, scope: 'user', unread: true, createdAt: now, ...payload });
+    // 신경로
+    const a = db.collection('notifications').doc(uid).collection('items').doc();
+    batch.set(a, { id: a.id, scope: 'user', unread: true, createdAt: now, ...payload });
+    // 구경로(호환)
+    const b = db.collection('users').doc(uid).collection('notifications').doc(a.id);
+    batch.set(b, { id: a.id, scope: 'user', unread: true, createdAt: now, ...payload });
   }
   await batch.commit();
 }
@@ -127,7 +128,7 @@ export async function POST(req: Request) {
     const joined = Number(r?.participantsCount ?? participants.length ?? 0);
     const minCap = Number(r?.minCapacity ?? 0);
 
-    // (A) 최소인원 미달: 시작 시각 도달 && closed=false && 참여<최소 && 아직 처리 안함
+    // A) 최소인원 미달 시작 차단
     if (!r?.closed && startAt && now >= startAt && minCap > 0 && joined < minCap && !r?.abortedUnderMin) {
       await ref.set(
         { closed: true, abortedUnderMin: true, endAt: nowIso, updatedAt: nowIso },
@@ -155,12 +156,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, action: 'under-min-closed' });
     }
 
-    // (B) 종료 시각 도달: closed=false && endAt<=now → 종료+투표오픈+알림
+    // B) 종료 → 투표중
     if (!r?.closed && endAt && now >= endAt && !r?.votingOpen) {
       await ref.set(
         {
           closed: true,
-          votingOpen: participants.length > 0, // 참여자가 있을 때만 투표 열기
+          votingOpen: participants.length > 0,
           voteReminderSentAt: nowIso,
           updatedAt: nowIso,
         },
