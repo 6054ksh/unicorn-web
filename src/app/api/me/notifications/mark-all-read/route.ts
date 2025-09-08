@@ -1,10 +1,9 @@
-// src/app/api/notifications/mark-all-read/route.ts
-import { NextResponse } from 'next/server';
-import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
-
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+import { NextResponse } from 'next/server';
+import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
 
 export async function POST(req: Request) {
   try {
@@ -18,27 +17,28 @@ export async function POST(req: Request) {
 
     const nowIso = new Date().toISOString();
 
-    const markPath = async (colRef: FirebaseFirestore.CollectionReference) => {
-      let updated = 0;
-      for (let i = 0; i < 10; i++) { // 10*500=5,000
-        const snap = await colRef.where('unread', '==', true).limit(500).get();
+    const markBatch = async (col: FirebaseFirestore.CollectionReference) => {
+      let total = 0;
+      for (let i = 0; i < 10; i++) {
+        const snap = await col.where('unread', '==', true).limit(500).get();
         if (snap.empty) break;
         const batch = db.batch();
         snap.docs.forEach(d => batch.update(d.ref, { unread: false, readAt: nowIso }));
         await batch.commit();
-        updated += snap.size;
+        total += snap.size;
         if (snap.size < 500) break;
       }
-      return updated;
+      return total;
     };
 
-    const a = db.collection('users').doc(uid).collection('notifications');        // 구경로
-    const b = db.collection('notifications').doc(uid).collection('items');       // 신경로
+    // 구 경로(users/{uid}/notifications)
+    const legacyCol = db.collection('users').doc(uid).collection('notifications');
+    // 신 경로(notifications/{uid}/items)
+    const newCol = db.collection('notifications').doc(uid).collection('items');
 
-    const updatedA = await markPath(a);
-    const updatedB = await markPath(b);
+    const [a, b] = await Promise.all([markBatch(legacyCol), markBatch(newCol)]);
 
-    return NextResponse.json({ ok: true, updated: updatedA + updatedB });
+    return NextResponse.json({ ok: true, updated: a + b });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
   }

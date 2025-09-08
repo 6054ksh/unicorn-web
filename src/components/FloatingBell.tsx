@@ -75,13 +75,16 @@ const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET
   }, [open]);
 
   // markAllRead 내부만 이렇게 바꾸면 됩니다.
-const markAllRead = async () => {
-  try {
-    await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
-    // 바로 재동기화 (서버 신뢰)
-    await fetchList();
-  } catch {}
-};
+  const markAllRead = async () => {
+    try {
+      await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
+      // 낙관적 지우기 + 서버 재동기화
+      setItems(prev => prev.map(n => ({ ...n, unread: false })));
+      setCount(0);
+      await fetchList();
+    } catch {}
+  };
+
 
 
   const time = (iso?: string) => { if (!iso) return ''; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
