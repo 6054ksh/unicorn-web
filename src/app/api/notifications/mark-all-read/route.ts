@@ -15,18 +15,14 @@ export async function POST(req: Request) {
     if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const { uid } = await auth.verifyIdToken(idToken);
 
-    const q = db
-      .collection('users')
-      .doc(uid)
-      .collection('notifications')
-      .where('unread', '==', true)
-      .limit(100);
-    const snap = await q.get();
-    if (snap.empty) return NextResponse.json({ ok: true, updated: 0 });
+    const ref = db.collection('notifications').doc(uid).collection('items').where('unread', '==', true).limit(200);
+    const snap = await ref.get();
 
     const batch = db.batch();
-    const now = new Date().toISOString();
-    snap.forEach((doc) => batch.update(doc.ref, { unread: false, updatedAt: now }));
+    const nowIso = new Date().toISOString();
+    snap.forEach(d => {
+      batch.set(d.ref, { unread: false, updatedAt: nowIso }, { merge: true });
+    });
     await batch.commit();
 
     return NextResponse.json({ ok: true, updated: snap.size });

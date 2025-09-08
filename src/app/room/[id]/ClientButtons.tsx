@@ -59,7 +59,6 @@ export default function ClientButtons({
     if (!uid) return false;
     if (isClosed || isEnded) return false;
     if (!isParticipant) return false;
-    // 시작 후 나가기 금지 정책 유지
     if (isStarted) return false;
     return true;
   }, [uid, isClosed, isEnded, isParticipant, isStarted]);
@@ -96,13 +95,13 @@ export default function ClientButtons({
 
   return (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-      <button onClick={join} disabled={!canJoin} style={{ padding: '8px 12px' }}>
+      <button aria-disabled={!canJoin} onClick={join} disabled={!canJoin} style={{ padding: '8px 12px' }}>
         참여하기
       </button>
-      <button onClick={leave} disabled={!canLeave} style={{ padding: '8px 12px' }}>
+      <button aria-disabled={!canLeave} onClick={leave} disabled={!canLeave} style={{ padding: '8px 12px' }}>
         나가기
       </button>
-      <span style={{ color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</span>
+      <span role="status" aria-live="polite" style={{ color: msg.startsWith('❌') ? 'crimson' : '#333' }}>{msg}</span>
     </div>
   );
 }
