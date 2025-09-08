@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { authedFetch } from '@/lib/authedFetch';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { firebaseApp } from '@/lib/firebase';
@@ -54,17 +54,43 @@ export default function Client({ room }: { room: Room }) {
     setJoined(uid ? list.includes(uid) : false);
   }, [uid, room.participants]);
 
+  const now = new Date();
+  const endAt = new Date(room.endAt);
+  const isEnded = now >= endAt;
+  const within24hAfterEnd = now.getTime() <= endAt.getTime() + 24 * 60 * 60 * 1000;
+
+  // 상세 진입 시: 종료되었고 아직 닫히지 않았다면 즉시 "투표중"으로 전환 (1회)
+  const triedCloseRef = useRef(false);
+  useEffect(() => {
+    (async () => {
+      if (triedCloseRef.current) return;
+      if (!isEnded) return;
+      if (room.closed === true && room.votingOpen === true) return;
+      triedCloseRef.current = true;
+      try {
+        const res = await authedFetch('/api/rooms/close-now', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ roomId: room.id }),
+        });
+        // 실패해도 페이지 이용은 계속되게 함 (크론이 처리할 수 있으므로)
+      } catch {}
+    })();
+  }, [isEnded, room.closed, room.votingOpen, room.id]);
+
   // 투표 여부 + 참여자 이름 가져오기
   useEffect(() => {
     (async () => {
       if (!uid) return;
       // 이미 투표했는지
-      const r1 = await authedFetch(`/api/rooms/vote-status?roomId=${room.id}`);
-      if (r1.ok) {
-        const j = await r1.json();
-        setVoted(!!j?.voted);
-      }
-      // 참여자 최소 정보
+      try {
+        const r1 = await authedFetch(`/api/rooms/vote-status?roomId=${room.id}`);
+        if (r1.ok) {
+          const j = await r1.json();
+          setVoted(!!j?.voted);
+        }
+      } catch {}
+      // 참여자 표시용 이름
       const uids: string[] = Array.isArray(room.participants) ? room.participants : [];
       const arr: UserLite[] = [];
       for (const u of uids) {
@@ -84,28 +110,23 @@ export default function Client({ room }: { room: Room }) {
     })();
   }, [uid, room.id, room.participants]);
 
-  const now = new Date();
-  const endAt = new Date(room.endAt);
-  const within24hAfterEnd = now.getTime() <= endAt.getTime() + 24 * 60 * 60 * 1000;
-  const canVoteWindow = now >= endAt && within24hAfterEnd;
-  const shouldShowVote = joined && !voted && (room.votingOpen || canVoteWindow);
-
-  const isClosed = !!room.closed;
-  const isEnded = now >= endAt;
-  const full = (room.capacity || 0) > 0 && (room.participantsCount || (room.participants?.length || 0)) >= room.capacity;
+  const full = (room.capacity || 0) > 0 &&
+    (room.participantsCount || (room.participants?.length || 0)) >= room.capacity;
 
   const canJoin = useMemo(() => {
-    if (isClosed || isEnded) return false;
+    if (room.closed || isEnded) return false;
     if (joined) return false;
     if (full) return false;
     return true;
-  }, [isClosed, isEnded, joined, full]);
+  }, [room.closed, isEnded, joined, full]);
 
   const canLeave = useMemo(() => {
-    if (isClosed || isEnded) return false;
+    if (room.closed || isEnded) return false;
     if (!joined) return false;
+    // 시작 후 나가기 금지 정책 그대로 유지
+    if (now >= new Date(room.startAt)) return false;
     return true;
-  }, [isClosed, isEnded, joined]);
+  }, [room.closed, isEnded, joined, room.startAt]);
 
   const join = async () => {
     setMsg('참여 중…');
@@ -129,6 +150,9 @@ export default function Client({ room }: { room: Room }) {
       setMsg('❌ ' + (e?.message ?? String(e)));
     }
   };
+
+  // 상세에서 투표 노출 조건: 참여자 & (votingOpen || (종료 후 24시간 내)) & 미투표
+  const shouldShowVote = joined && !voted && (room.votingOpen || (isEnded && within24hAfterEnd));
 
   const submitVote = async () => {
     try {
@@ -165,21 +189,20 @@ export default function Client({ room }: { room: Room }) {
           <div style={{ color: '#666', fontSize: 12, marginTop: 2 }}>
             시간: {fmt(room.startAt)} ~ {fmt(room.endAt)}
           </div>
-          {room.votingOpen && <div style={{ marginTop: 6, fontSize: 12, color: '#92400e' }}>상태: 투표중</div>}
+          {(room.votingOpen || (isEnded && within24hAfterEnd)) &&
+            <div style={{ marginTop: 6, fontSize: 12, color: '#92400e' }}>상태: 투표중</div>}
         </div>
         <div style={{ display:'flex', gap:8 }}>
           <button
             onClick={join}
             disabled={!canJoin}
             style={{
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: '1px solid #ddd',
+              padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd',
               background: canJoin ? '#111' : '#e5e7eb',
               color: canJoin ? '#fff' : '#999',
               cursor: canJoin ? 'pointer' : 'not-allowed'
             }}
-            title={joined ? '이미 참여했습니다' : full ? '정원 초과' : isEnded ? '종료됨' : isClosed ? '닫힘' : '참여하기'}
+            title={joined ? '이미 참여했습니다' : full ? '정원 초과' : isEnded ? '종료됨' : room.closed ? '닫힘' : '참여하기'}
           >
             참여하기
           </button>
@@ -187,21 +210,18 @@ export default function Client({ room }: { room: Room }) {
             onClick={leave}
             disabled={!canLeave}
             style={{
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: '1px solid #ddd',
+              padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd',
               background: canLeave ? '#fff' : '#f3f4f6',
               color: canLeave ? '#111' : '#999',
               cursor: canLeave ? 'pointer' : 'not-allowed'
             }}
-            title={!joined ? '참여하지 않았습니다' : isEnded ? '종료됨' : isClosed ? '닫힘' : '나가기'}
+            title={!joined ? '참여하지 않았습니다' : isEnded ? '종료됨' : room.closed ? '닫힘' : '나가기'}
           >
             나가기
           </button>
         </div>
       </header>
 
-      {/* 상세 정보 */}
       {room.type || room.content || room.kakaoOpenChatUrl ? (
         <section style={{ border:'1px solid #e5e7eb', borderRadius: 12, padding: 12, background:'#fff' }}>
           {room.type && <div style={{ marginBottom:6 }}>종류: {room.type}</div>}
