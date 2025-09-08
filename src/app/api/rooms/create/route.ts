@@ -13,6 +13,111 @@ function httpError(message: string, status = 400) {
   return e;
 }
 
+/** ─────────────────────────────
+ * 유틸: 유저별 알림 저장(신/구 경로 모두)
+ * ──────────────────────────── */
+async function addUserNotifications(
+  db: FirebaseFirestore.Firestore,
+  uids: string[],
+  payload: { type: string; title: string; body?: string; url?: string; createdAt?: string; meta?: any }
+) {
+  const now = payload.createdAt || new Date().toISOString();
+  const batch = db.batch();
+  for (const uid of uids) {
+    if (!uid) continue;
+    // 최신 경로
+    const refA = db.collection('notifications').doc(uid).collection('items').doc();
+    batch.set(refA, { id: refA.id, scope: 'user', unread: true, createdAt: now, ...payload });
+    // 레거시 경로(호환)
+    const refB = db.collection('users').doc(uid).collection('notifications').doc(refA.id);
+    batch.set(refB, { id: refA.id, scope: 'user', unread: true, createdAt: now, ...payload });
+  }
+  await batch.commit();
+}
+
+/** ─────────────────────────────
+ * 유틸: 대상 유저들의 FCM 토큰 수집 (10개 in쿼리 분할)
+ * ──────────────────────────── */
+async function fetchTokensForUsers(db: FirebaseFirestore.Firestore, uids: string[]) {
+  const unique = Array.from(new Set(uids)).filter(Boolean);
+  const owners = new Map<string, string[]>(); // token -> [uid...]
+  const tokens: string[] = [];
+  for (let i = 0; i < unique.length; i += 10) {
+    const chunk = unique.slice(i, i + 10);
+    const snap = await db
+      .collection('users')
+      .where(admin.firestore.FieldPath.documentId(), 'in', chunk)
+      .get();
+    snap.forEach((d) => {
+      const arr: string[] = Array.isArray((d.data() as any)?.fcmTokens) ? (d.data() as any).fcmTokens : [];
+      for (const t of arr) {
+        if (!t) continue;
+        if (!owners.has(t)) owners.set(t, []);
+        owners.get(t)!.push(d.id);
+        if (!tokens.includes(t)) tokens.push(t);
+      }
+    });
+  }
+  return { tokens, owners };
+}
+
+/** ─────────────────────────────
+ * 유틸: 잘못된 토큰 정리
+ * ──────────────────────────── */
+async function removeBadTokens(
+  db: FirebaseFirestore.Firestore,
+  badTokens: string[],
+  owners: Map<string, string[]>
+) {
+  if (!badTokens.length) return;
+  const batch = db.batch();
+  for (const t of badTokens) {
+    for (const uid of owners.get(t) || []) {
+      batch.update(db.collection('users').doc(uid), {
+        fcmTokens: admin.firestore.FieldValue.arrayRemove(t),
+      });
+    }
+  }
+  await batch.commit().catch(() => {});
+}
+
+/** ─────────────────────────────
+ * 유틸: 멀티캐스트 푸시
+ * ──────────────────────────── */
+async function pushMulticast(
+  messaging: ReturnType<typeof getAdminMessaging>,
+  tokens: string[],
+  msg: { title: string; body?: string; url?: string; tag?: string }
+) {
+  if (!tokens.length) return { success: 0, failure: 0, badTokens: [] as string[] };
+  const bad: string[] = [];
+  let success = 0;
+  let failure = 0;
+  for (let i = 0; i < tokens.length; i += 500) {
+    const chunk = tokens.slice(i, i + 500);
+    const res = await messaging.sendEachForMulticast({
+      tokens: chunk,
+      webpush: {
+        headers: { Urgency: 'high', TTL: '120' },
+        fcmOptions: msg.url ? { link: msg.url } : undefined,
+        notification: { title: msg.title, body: msg.body || '', tag: msg.tag, renotify: true },
+      },
+      data: msg.url ? { url: msg.url } : undefined,
+    });
+    res.responses.forEach((r, idx) => {
+      if (r.success) success += 1;
+      else {
+        failure += 1;
+        const code = (r.error as any)?.code || '';
+        if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
+          bad.push(chunk[idx]);
+        }
+      }
+    });
+  }
+  return { success, failure, badTokens: bad };
+}
+
 export async function POST(req: Request) {
   try {
     const auth = getAdminAuth();
@@ -56,7 +161,7 @@ export async function POST(req: Request) {
       : new Date(startAt.getTime() + 5 * 60 * 60 * 1000);
     if (isNaN(endAt.getTime())) throw httpError('invalid endAt', 400);
 
-    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000); // 그대로 유지(표시 정책은 UI에서)
+    const revealAt = new Date(startAt.getTime() - 60 * 60 * 1000); // 그대로 유지
 
     // ---- 하루 1회 개설 제한 (관리자는 예외) ----
     const adminSnap = await db.collection('admins').doc(uid).get();
@@ -132,7 +237,7 @@ export async function POST(req: Request) {
         { merge: true }
       );
 
-    // --- 글로벌 알림(벨 패널용) ---
+    // --- 글로벌 알림(벨 패널용) 기존 기능 유지 ---
     await pushGlobal({
       type: 'room-created',
       title: '새로운 모임이 추가되었습니다! 🎉',
@@ -140,8 +245,34 @@ export async function POST(req: Request) {
       url: `/room/${ref.id}`,
     });
 
-    // --- (선택) 빠른 FCM 브로드캐스트: 기존 로직 유지 시 여기서 사용 ---
-    //  이미 구현돼 있다면 생략 가능. 필요하면 tokens 수집 → sendEachForMulticast.
+    // --- ✅ 유저별 알림 + FCM (신규 추가) ---
+    // 모든 사용자 대상으로 in-app 알림 & 푸시
+    const everyone = await db.collection('users').get();
+    const allUids = everyone.docs.map(d => d.id);
+    if (allUids.length) {
+      const titleN = '새 모임이 올라왔어요 🎉';
+      const bodyN = `『${title}』 — 지금 참여해보세요!`;
+      const url = `/room/${ref.id}`;
+
+      // in-app 알림(신/구 경로 동시 기록)
+      await addUserNotifications(db, allUids, {
+        type: 'room-created',
+        title: titleN,
+        body: bodyN,
+        url,
+        meta: { roomId: ref.id }
+      });
+
+      // 푸시
+      const { tokens, owners } = await fetchTokensForUsers(db, allUids);
+      const res = await pushMulticast(getAdminMessaging(), tokens, {
+        title: titleN,
+        body: bodyN,
+        url,
+        tag: 'room-created'
+      });
+      if (res.badTokens.length) await removeBadTokens(db, res.badTokens, owners);
+    }
 
     return NextResponse.json({ ok: true, id: ref.id });
   } catch (e: any) {

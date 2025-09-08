@@ -20,9 +20,7 @@ export async function POST(req: Request) {
 
     const batch = db.batch();
     const nowIso = new Date().toISOString();
-    snap.forEach(d => {
-      batch.set(d.ref, { unread: false, updatedAt: nowIso }, { merge: true });
-    });
+    snap.forEach(d => batch.set(d.ref, { unread: false, updatedAt: nowIso }, { merge: true }));
     await batch.commit();
 
     return NextResponse.json({ ok: true, updated: snap.size });
