@@ -15,6 +15,7 @@ type Room = {
   endAt: string;
   revealAt?: string;
   closed?: boolean;
+  votingOpen?: boolean;
   participants?: string[];
   participantsCount?: number;
   kakaoOpenChatUrl?: string;
@@ -24,17 +25,21 @@ type Room = {
 
 function fmt(iso?: string) {
   if (!iso) return '-';
-  try {
-    return new Date(iso).toLocaleString(); // 브라우저(사용자) 타임존 기준
-  } catch {
-    return iso;
-  }
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
+
+type UserLite = { uid: string; name?: string };
 
 export default function Client({ room }: { room: Room }) {
   const [uid, setUid] = useState<string | null>(null);
   const [joined, setJoined] = useState<boolean>(false);
   const [msg, setMsg] = useState('');
+  const [voted, setVoted] = useState<boolean>(false);
+  const [participants, setParticipants] = useState<UserLite[]>([]);
+  const [thumbsForUid, setThumbsForUid] = useState<string>('');
+  const [heartForUid, setHeartForUid] = useState<string>('');
+  const [noshowUid, setNoshowUid] = useState<'none' | string>('none');
+  const [submitting, setSubmitting] = useState(false);
 
   // 내 UID
   useEffect(() => {
@@ -43,16 +48,50 @@ export default function Client({ room }: { room: Room }) {
     return () => unsub();
   }, []);
 
-  // 내가 참여했는지 간단 확인
+  // 내가 참여했는지
   useEffect(() => {
-    if (!uid) { setJoined(false); return; }
     const list = Array.isArray(room.participants) ? room.participants : [];
-    setJoined(list.includes(uid));
+    setJoined(uid ? list.includes(uid) : false);
   }, [uid, room.participants]);
 
+  // 투표 여부 + 참여자 이름 가져오기
+  useEffect(() => {
+    (async () => {
+      if (!uid) return;
+      // 이미 투표했는지
+      const r1 = await authedFetch(`/api/rooms/vote-status?roomId=${room.id}`);
+      if (r1.ok) {
+        const j = await r1.json();
+        setVoted(!!j?.voted);
+      }
+      // 참여자 최소 정보
+      const uids: string[] = Array.isArray(room.participants) ? room.participants : [];
+      const arr: UserLite[] = [];
+      for (const u of uids) {
+        try {
+          const ur = await authedFetch(`/api/users/get?uid=${encodeURIComponent(u)}`);
+          if (ur.ok) {
+            const d = await ur.json();
+            arr.push({ uid: u, name: d?.name || undefined });
+          } else {
+            arr.push({ uid: u });
+          }
+        } catch {
+          arr.push({ uid: u });
+        }
+      }
+      setParticipants(arr);
+    })();
+  }, [uid, room.id, room.participants]);
+
   const now = new Date();
+  const endAt = new Date(room.endAt);
+  const within24hAfterEnd = now.getTime() <= endAt.getTime() + 24 * 60 * 60 * 1000;
+  const canVoteWindow = now >= endAt && within24hAfterEnd;
+  const shouldShowVote = joined && !voted && (room.votingOpen || canVoteWindow);
+
   const isClosed = !!room.closed;
-  const isEnded = now >= new Date(room.endAt);
+  const isEnded = now >= endAt;
   const full = (room.capacity || 0) > 0 && (room.participantsCount || (room.participants?.length || 0)) >= room.capacity;
 
   const canJoin = useMemo(() => {
@@ -75,7 +114,6 @@ export default function Client({ room }: { room: Room }) {
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || 'join failed');
       setMsg('✅ 참여 완료');
-      setJoined(true);
     } catch (e: any) {
       setMsg('❌ ' + (e?.message ?? String(e)));
     }
@@ -87,9 +125,32 @@ export default function Client({ room }: { room: Room }) {
       const j = await res.json();
       if (!res.ok) throw new Error(j?.error || 'leave failed');
       setMsg('✅ 나가기 완료');
-      setJoined(false);
     } catch (e: any) {
       setMsg('❌ ' + (e?.message ?? String(e)));
+    }
+  };
+
+  const submitVote = async () => {
+    try {
+      setSubmitting(true);
+      const res = await authedFetch('/api/rooms/vote', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          roomId: room.id,
+          thumbsForUid: thumbsForUid || null,
+          heartForUid: heartForUid || null,
+          noshowUid,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || '투표 실패');
+      setVoted(true);
+      setMsg('🗳️ 투표가 저장되었어요. 감사합니다!');
+    } catch (e: any) {
+      setMsg('❌ ' + (e?.message ?? String(e)));
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -104,6 +165,7 @@ export default function Client({ room }: { room: Room }) {
           <div style={{ color: '#666', fontSize: 12, marginTop: 2 }}>
             시간: {fmt(room.startAt)} ~ {fmt(room.endAt)}
           </div>
+          {room.votingOpen && <div style={{ marginTop: 6, fontSize: 12, color: '#92400e' }}>상태: 투표중</div>}
         </div>
         <div style={{ display:'flex', gap:8 }}>
           <button
@@ -139,6 +201,7 @@ export default function Client({ room }: { room: Room }) {
         </div>
       </header>
 
+      {/* 상세 정보 */}
       {room.type || room.content || room.kakaoOpenChatUrl ? (
         <section style={{ border:'1px solid #e5e7eb', borderRadius: 12, padding: 12, background:'#fff' }}>
           {room.type && <div style={{ marginBottom:6 }}>종류: {room.type}</div>}
@@ -153,6 +216,52 @@ export default function Client({ room }: { room: Room }) {
           )}
         </section>
       ) : null}
+
+      {/* 투표 박스 */}
+      {shouldShowVote && (
+        <section style={{ border:'1px dashed #f59e0b', borderRadius: 12, padding: 12, background:'#fffbeb' }}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>🗳️ 이 모임에 투표하기</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <label style={{ fontSize: 12 }}>👍 칭찬하고 싶은 사람</label>
+            <select
+              value={thumbsForUid}
+              onChange={e => setThumbsForUid(e.target.value)}
+              style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb' }}
+            >
+              <option value="">선택 안 함</option>
+              {participants.map(p => (<option key={p.uid} value={p.uid}>{p.name || p.uid}</option>))}
+            </select>
+
+            <label style={{ fontSize: 12 }}>❤️ 고마운 사람</label>
+            <select
+              value={heartForUid}
+              onChange={e => setHeartForUid(e.target.value)}
+              style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb' }}
+            >
+              <option value="">선택 안 함</option>
+              {participants.map(p => (<option key={p.uid} value={p.uid}>{p.name || p.uid}</option>))}
+            </select>
+
+            <label style={{ fontSize: 12 }}>🚫 노쇼</label>
+            <select
+              value={noshowUid}
+              onChange={e => setNoshowUid((e.target.value as any) || 'none')}
+              style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb' }}
+            >
+              <option value="none">없음</option>
+              {participants.map(p => (<option key={p.uid} value={p.uid}>{p.name || p.uid}</option>))}
+            </select>
+
+            <button
+              onClick={submitVote}
+              disabled={submitting}
+              style={{ padding: '8px 12px', borderRadius: 8, background: '#111', color: '#fff', border: '1px solid #111' }}
+            >
+              {submitting ? '제출 중…' : '제출'}
+            </button>
+          </div>
+        </section>
+      )}
 
       {msg && <p style={{ color: msg.startsWith('❌') ? 'crimson' : '#111' }}>{msg}</p>}
     </div>
