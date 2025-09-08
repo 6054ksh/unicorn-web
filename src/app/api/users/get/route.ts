@@ -1,30 +1,37 @@
-// src/app/api/users/get/route.ts
+import { NextResponse } from 'next/server';
+import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-import { NextResponse } from 'next/server';
-import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
 
 export async function GET(req: Request) {
   try {
     const auth = getAdminAuth();
     const db = getAdminDb();
 
+    const url = new URL(req.url);
+    const uidParam = String(url.searchParams.get('uid') || '').trim();
+    if (!uidParam) return NextResponse.json({ error: 'uid required' }, { status: 400 });
+
+    // 인증은 있어도 되고 없어도 되지만, 기존 컨벤션을 따라 Bearer 있으면 검증
     const authHeader = req.headers.get('authorization') || '';
-    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!idToken) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    await auth.verifyIdToken(idToken);
+    if (authHeader.startsWith('Bearer ')) {
+      const idToken = authHeader.slice(7);
+      await auth.verifyIdToken(idToken).catch(() => null);
+    }
 
-    const { searchParams } = new URL(req.url);
-    const uid = String(searchParams.get('uid') || '').trim();
-    if (!uid) return NextResponse.json({ error: 'uid required' }, { status: 400 });
+    const doc = await db.collection('users').doc(uidParam).get();
+    if (!doc.exists) return NextResponse.json({ ok: true, uid: uidParam });
 
-    const s = await db.collection('users').doc(uid).get();
-    if (!s.exists) return NextResponse.json({ ok: true, name: null, profileImage: null });
-    const d = s.data() as any;
-    return NextResponse.json({ ok: true, name: d?.name || null, profileImage: d?.profileImage || null });
-  } catch (e:any) {
+    const data = doc.data() as any;
+    return NextResponse.json({
+      ok: true,
+      uid: uidParam,
+      name: data?.name || null,
+      profileImage: data?.profileImage || null,
+    });
+  } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 });
   }
 }

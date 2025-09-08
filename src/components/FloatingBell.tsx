@@ -30,9 +30,11 @@ export default function FloatingBell() {
   const fetchList = async () => {
     try {
       setLoading(true);
-      const res = await authedFetch('/api/notifications/list?limit=50&onlyUnread=1', { method: 'GET' });
+      // ✅ onlyUnread=1 제거 (인덱스 없이도 동작)
+      const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setItems([]); setCount(0); return; }
+
       const arr: NotiItem[] = Array.isArray(j?.notifications) ? j.notifications : [];
       const unreadCount = Number(j?.unreadCount || 0);
 
@@ -74,11 +76,14 @@ export default function FloatingBell() {
   const markAllRead = async () => {
     try {
       await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
+      // 낙관적 업데이트 + 서버 재동기화
       setItems([]); setCount(0);
+      await fetchList();
     } catch {}
   };
 
   const time = (iso?: string) => { if (!iso) return ''; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+  // 읽음=false만 제외. (undefined, true는 보임) => 전역 공지도 표시됨
   const visible = useMemo(() => items.filter(i => i.unread !== false), [items]);
 
   const pillStyle = (bg: string, color: string) => ({

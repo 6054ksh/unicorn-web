@@ -1,4 +1,3 @@
-// src/app/api/rooms/vote/route.ts
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebaseAdmin';
 import * as admin from 'firebase-admin';
@@ -57,6 +56,7 @@ export async function POST(req: Request) {
     // 3) 트랜잭션: vote doc 생성 + 점수 카운트 증가
     const nowIso = new Date().toISOString();
     await db.runTransaction(async (tx) => {
+      // 다시 검사(경쟁 조건)
       const exist = await tx.get(voteRef);
       if (exist.exists) throw httpError('already-voted', 409);
 
@@ -69,6 +69,7 @@ export async function POST(req: Request) {
         createdAt: nowIso,
       });
 
+      // 카운트
       if (validThumb) {
         const sref = db.collection('scores').doc(validThumb);
         tx.set(sref, { thumbsCount: admin.firestore.FieldValue.increment(1) }, { merge: true });
@@ -85,7 +86,7 @@ export async function POST(req: Request) {
       const votedUids = new Set(allVotes.docs.map(d => (d.data() as any)?.voterUid).filter(Boolean));
       const everyoneVoted = participants.length > 0 && participants.every(u => votedUids.has(u));
       if (everyoneVoted) {
-        await roomRef.set({ voteComplete: true, votingOpen: false, updatedAt: nowIso }, { merge: true });
+        await roomRef.set({ voteComplete: true, votingOpen: false, closed: true, updatedAt: nowIso }, { merge: true });
       }
     } catch {}
 

@@ -55,28 +55,44 @@ export default function RoomsPage() {
     }
   };
 
+  // 종료된 방은 ensure(크론 대체)
+  const ensureRoomsIfNeeded = async (list: Room[]) => {
+    try {
+      const now = Date.now();
+      const targets = list.filter(r => !r.closed && r.endAt && new Date(r.endAt).getTime() <= now).slice(0, 5);
+      // 과호출 방지: 한번에 최대 5개만
+      await Promise.all(targets.map(r =>
+        authedFetch('/api/rooms/ensure', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ roomId: r.id }),
+        }).catch(() => {})
+      ));
+    } catch {}
+  };
+
   // 내가 참여한 방 id 세트
   const fetchMyIds = async () => {
     if (!uid) { setJoined(new Set()); return; }
     try {
       const res = await authedFetch('/api/rooms/my-ids');
       const j = await res.json();
-      if (res.ok && Array.isArray(j.ids)) {
-        setJoined(new Set(j.ids));
-      } else {
-        setJoined(new Set());
-      }
+      if (res.ok && Array.isArray(j.ids)) setJoined(new Set(j.ids));
+      else setJoined(new Set());
     } catch {
       setJoined(new Set());
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { (async () => { await fetchAll(); await ensureRoomsIfNeeded(rooms); })(); }, []);
   useEffect(() => {
     if (!auto) { if (timerRef.current) clearInterval(timerRef.current); timerRef.current = null; return; }
-    timerRef.current = setInterval(fetchAll, 10000);
+    timerRef.current = setInterval(async () => {
+      await fetchAll();
+      await ensureRoomsIfNeeded(rooms);
+    }, 10000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [auto]);
+  }, [auto, rooms]);
 
   useEffect(() => { fetchMyIds(); }, [uid]);
 
