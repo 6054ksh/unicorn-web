@@ -75,15 +75,24 @@ const res = await authedFetch('/api/notifications/list?limit=50', { method: 'GET
   }, [open]);
 
   // markAllRead 내부만 이렇게 바꾸면 됩니다.
-  const markAllRead = async () => {
+    const markAllRead = async () => {
     try {
-      await authedFetch('/api/notifications/mark-all-read', { method: 'POST' });
-      // 낙관적 지우기 + 서버 재동기화
-      setItems(prev => prev.map(n => ({ ...n, unread: false })));
+      // 전체 삭제(비우기)
+      const res = await authedFetch('/api/notifications/clear-all', { method: 'POST' });
+      if (!res.ok) {
+        // 실패해도 로컬 UI는 비움 (다음 새 알림부터 다시 채워짐)
+        setItems([]);
+        setCount(0);
+        return;
+      }
+      setItems([]);
       setCount(0);
-      await fetchList();
-    } catch {}
+    } catch {
+      setItems([]);
+      setCount(0);
+    }
   };
+
 
 
 
