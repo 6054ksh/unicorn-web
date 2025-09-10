@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
 import * as admin from 'firebase-admin';
+import { callKakaoChannelAPI, KakaoEventUser } from '@/lib/server/kakaoChannel';
 import { pushGlobal } from '@/lib/server/notify';
 
 export const runtime = 'nodejs';
@@ -272,6 +273,37 @@ export async function POST(req: Request) {
         tag: 'room-created'
       });
       if (res.badTokens.length) await removeBadTokens(db, res.badTokens, owners);
+    }
+
+    // --- ✅ 카카오 채널(오픈빌더) room_created 이벤트 브로드캐스트 ---
+    try {
+      // kakaoAppUserId 를 가진 유저 대상으로만 발송
+      const kakaoUsersSnap = await db.collection('users')
+        .where('kakaoAppUserId', '>', '')
+        .get();
+
+      const targets: KakaoEventUser[] = kakaoUsersSnap.docs
+        .map(d => String((d.data() as any).kakaoAppUserId || ''))
+        .filter(Boolean)
+        .map(id => ({ idType: 'appUserId', id }));
+
+      if (targets.length) {
+        const startAtKST = new Intl.DateTimeFormat('ko-KR', {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+          timeZone: 'Asia/Seoul'
+        }).format(startAt);
+
+        const base = (process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+        await callKakaoChannelAPI('room_created', targets, {
+          title,
+          location,
+          startAtKST,
+          url: `${base}/room/${ref.id}`,
+        });
+      }
+    } catch (err) {
+      console.error('Kakao room_created event send failed:', err);
     }
 
     return NextResponse.json({ ok: true, id: ref.id });

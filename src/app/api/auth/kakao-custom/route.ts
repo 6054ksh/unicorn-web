@@ -56,6 +56,7 @@ export async function POST(req: Request) {
           provider: 'kakao',
           name: finalName,
           profileImage: finalProfile,
+          kakaoAppUserId: kakaoId,              // ✅ 추가: 카카오 사용자 ID 저장
           lastKakaoSyncAt: new Date(),
           createdAt: prev?.createdAt || new Date(),
           updatedAt: new Date(),

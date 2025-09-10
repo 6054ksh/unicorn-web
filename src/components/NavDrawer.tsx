@@ -69,14 +69,14 @@ export default function NavDrawer() {
         <aside
           onClick={(e) => e.stopPropagation()}
           style={{
-            position:'absolute', left:0, top:0, bottom:0, width:260,
+            position:'absolute', left:0, top:0, bottom:0, width:265,
             transform: open ? 'translateX(0)' : 'translateX(-100%)',
             transition:'transform .18s ease',
-            background:'#f8fafc', borderRight:'1px solid #e5e7eb', padding:14,
+            background:'#f8fafc', borderRight:'1px solid #e5e7eb', padding:5,
             display:'grid', gap:5
           }}
         >
-          <div style={{ fontWeight:300, fontSize:16, marginBottom:6 }}>UNIcorn</div>
+          <div style={{ fontWeight:900, fontSize:16, marginBottom:3 }}>UNIcorn</div>
           <Item href="/" label="홈" emoji="🏠" />
           <Item href="/room" label="모임 목록" emoji="🗓️" />
           <Item href="/create" label="모임 만들기" emoji="🎉" />
