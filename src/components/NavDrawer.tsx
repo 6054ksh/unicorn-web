@@ -20,20 +20,39 @@ export default function NavDrawer() {
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        padding: '6px 10px',
-        borderRadius: 10,
+        padding: '6px 8px',          // ⬅︎ 더 컴팩트
+        height: 34,                  // ⬅︎ 균일한 높이
+        borderRadius: 8,
         textDecoration: 'none',
         color: '#111',
-        border: '1px solid #eee',
-        background: '#fff',
+        border: '1px solid transparent', // ⬅︎ 기본은 테두리 없음
+        background: 'transparent',       // ⬅︎ 기본은 투명
         fontSize: 13,
         lineHeight: 1.2,
+        transition: 'background .15s ease, border-color .15s ease, transform .08s ease',
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = '#e5e7eb'; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.borderColor = '#eee'; }}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget as HTMLAnchorElement;
+        el.style.background = '#fff';
+        el.style.borderColor = '#e5e7eb';
+      }}
+      onMouseLeave={(e) => {
+        const el = e.currentTarget as HTMLAnchorElement;
+        el.style.background = 'transparent';
+        el.style.borderColor = 'transparent';
+      }}
     >
-      <span style={{ fontSize: 16 }}>{emoji}</span>
-      <span style={{ fontWeight: 700 }}>{label}</span>
+      <span
+        aria-hidden
+        style={{
+          width: 22, height: 22, display: 'grid', placeItems: 'center',
+          fontSize: 14, borderRadius: 6, background: '#f3f4f6', // 작은 아이콘 배경칩
+          border: '1px solid #e5e7eb'
+        }}
+      >
+        {emoji}
+      </span>
+      <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{label}</span>
     </Link>
   );
 
@@ -92,11 +111,12 @@ export default function NavDrawer() {
       {/* 사이드 드로어 */}
       <div
         role="dialog"
+        aria-modal
         aria-hidden={!open}
         style={{
           position: 'fixed',
           inset: 0,
-          zIndex: 899,
+          zIndex: 1090,
           pointerEvents: open ? 'auto' : 'none',
         }}
         onClick={() => setOpen(false)}
@@ -120,23 +140,57 @@ export default function NavDrawer() {
             left: 0,
             top: 0,
             bottom: 0,
-            width: 190,
+            width: 196,                         // 약간 더 슬림
             transform: open ? 'translateX(0)' : 'translateX(-100%)',
             transition: 'transform .18s ease',
             background: '#f8fafc',
             borderRight: '1px solid #e5e7eb',
-            padding: '6px 6px 8px',
             display: 'grid',
-            gap: 6,
+            gridTemplateRows: 'auto 1fr',       // 헤더 고정 + 리스트 스크롤
           }}
         >
-          {/* 상단에 딱 붙도록 여백 최소화 */}
-          <div style={{ fontWeight: 700, fontSize: 14, color: '#111', padding: '2px 4px' }}>UNIcorn</div>
-          <Item href="/" label="홈" emoji="🏠" />
-          <Item href="/room" label="모임 목록" emoji="🗓️" />
-          <Item href="/create" label="모임 만들기" emoji="🎉" />
-          <Item href="/scores" label="점수판" emoji="🏆" />
-          <Item href="/feedback" label="방명록" emoji="🍀" />
+          {/* 헤더(상단 밀착) */}
+          <div
+            style={{
+              padding: '8px 8px 6px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              borderBottom: '1px solid #e5e7eb',
+              background: 'linear-gradient(#ffffff, #f8fafc)',
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 14 }}>UNIcorn</div>
+            <div style={{ marginLeft: 'auto' }}>
+              <button
+                aria-label="메뉴 닫기"
+                onClick={() => setOpen(false)}
+                style={{
+                  width: 28, height: 28, borderRadius: 8,
+                  border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer',
+                  lineHeight: 1, fontSize: 14
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* 목록(컴팩트 & 상단 밀착, 스크롤 가능) */}
+          <div
+            style={{
+              padding: '6px',               // 최소 여백
+              display: 'grid',
+              gap: 4,                        // 아이템 간 거리 좁게
+              overflowY: 'auto',
+            }}
+          >
+            <Item href="/" label="홈" emoji="🏠" />
+            <Item href="/room" label="모임 목록" emoji="🗓️" />
+            <Item href="/create" label="모임 만들기" emoji="🎉" />
+            <Item href="/scores" label="점수판" emoji="🏆" />
+            <Item href="/feedback" label="방명록" emoji="🍀" />
+          </div>
         </aside>
       </div>
     </>
