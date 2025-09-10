@@ -12,7 +12,6 @@ function httpError(message: string, status = 400) {
   return e;
 }
 
-// 공용: 사용자별 알림 파티션/레거시 둘 다 기록
 async function addUserNotis(
   db: FirebaseFirestore.Firestore,
   uids: string[],
@@ -61,15 +60,15 @@ export async function POST(req: Request) {
 
     let changed = false;
 
-    // 1) 최소인원 미달로 시작 시간 도달: 시작과 동시에 취소(삭제 X)
+    // A) 최소인원 미달 + 시작 시간 도달 → 종료(로그 유지, 삭제/숨김 X)
     if (!r?.closed && startAt && now >= startAt && minCap > 0 && joined < minCap) {
       await ref.set(
         {
           closed: true,
           cancelledDueToMin: true,
           abortedUnderMin: true,
-          hiddenFromList: true, // 리스트 기본에서는 숨김
-          endAt: nowIso,
+          votingOpen: false,
+          endAt: nowIso, // 시작과 동시에 종료 처리
           updatedAt: nowIso,
         },
         { merge: true }
@@ -79,9 +78,8 @@ export async function POST(req: Request) {
       if (participants.length) {
         const title = '아쉽게도 인원이 부족해서 모임이 종료되었어요 🥺';
         const body = `『${r.title}』 — 최소 ${minCap}명 필요, 현재 ${joined}명`;
-        const url = '/room';
+        const url = `/room/${roomId}`;
 
-        // in-app
         await addUserNotis(db, participants, { type: 'under-min-closed', title, body, url, meta: { roomId } });
 
         // 푸시
@@ -104,12 +102,12 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2) 종료 시간 도달: 투표 개시(삭제 X)
+    // B) 종료 시간 도달 → 투표 개시(삭제 X)
     if (endAt && now >= endAt && r?.voteReminderSentAt == null) {
       await ref.set(
         {
           closed: true,
-          votingOpen: participants.length > 0,
+          votingOpen: (participants.length > 0),
           voteReminderSentAt: nowIso,
           updatedAt: nowIso,
         },
