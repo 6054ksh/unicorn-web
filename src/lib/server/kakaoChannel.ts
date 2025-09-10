@@ -1,38 +1,59 @@
-import 'server-only';
+// 예시: src/lib/server/kakaoChannel.ts (네 프로젝트 경로에 맞게)
+import { getAdminDb } from '@/lib/firebaseAdmin';
 
-export type KakaoEventUser = {
-  idType: 'appUserId' | 'botUserKey' | 'plusfriendUserKey';
-  id: string;
-};
+type Target = { id: string; idType: 'appUserId' | 'userPhone' }; // 실제 사양과 맞추세요.
 
 export async function callKakaoChannelAPI(
-  eventName: string,
-  users: KakaoEventUser[],
-  params?: Record<string, any>
+  event: string,
+  targets: Target[],
+  payload: Record<string, any>
 ) {
-  const botId = process.env.KAKAO_BOT_ID;
-  const adminKey = process.env.KAKAO_ADMIN_KEY; // ✅ 디벨로퍼스 Admin Key
+  const BOT_ID = process.env.KAKAO_BOT_ID!;
+  const BOT_API_KEY = process.env.KAKAO_BOT_API_KEY!;
 
-  if (!botId || !adminKey) throw new Error('Missing KAKAO_BOT_ID or KAKAO_ADMIN_KEY');
-  if (!users?.length) return { ok: true, skipped: 'no-users' };
-
-  const payload = {
-    event: { name: eventName },
-    user: users.map(u => ({ id: u.id, type: u.idType })),
-    ...(params ? { params } : {})
+  const body = {
+    botId: BOT_ID,
+    event,
+    targets,
+    payload,
   };
 
-  const res = await fetch(`https://bot-api.kakao.com/v2/bots/${encodeURIComponent(botId)}/talk`, {
-    method: 'POST',
-    headers: {
-      Authorization: `KakaoAK ${adminKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-    cache: 'no-store',
-  });
+  let ok = false;
+  let resp: any = null;
+  let err: any = null;
 
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Kakao Event API ${res.status} ${res.statusText}: ${text}`);
-  try { return JSON.parse(text); } catch { return { ok: true }; }
+  try {
+    const r = await fetch(process.env.KAKAO_EVENT_ENDPOINT!, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // 실제 카카오 iOB 이벤트 엔드포인트 스펙에 맞춰 Authorization 등 헤더 구성
+        Authorization: `KakaoAK ${BOT_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+    });
+    resp = await r.json().catch(() => ({}));
+    ok = r.ok;
+  } catch (e: any) {
+    err = e;
+  }
+
+  // Firestore 로깅(선택)
+  try {
+    const db = getAdminDb();
+    await db.collection('kakaoEventLogs').add({
+      at: new Date().toISOString(),
+      event,
+      targets,
+      payload,
+      ok,
+      resp,
+      error: err ? String(err?.message ?? err) : null,
+    });
+  } catch {}
+
+  if (!ok) {
+    throw new Error(resp?.message || err?.message || 'kakao event failed');
+  }
+  return resp;
 }
