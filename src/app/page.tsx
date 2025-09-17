@@ -19,9 +19,9 @@ type Room = {
   title: string;
   location: string;
   capacity: number;
-  startAt: string;
-  endAt: string;
-  revealAt: string;
+  startAt?: string;
+  endAt?: string;
+  revealAt?: string;
   participants?: string[];
   participantsCount?: number;
   closed?: boolean;
@@ -42,6 +42,24 @@ export default function HomePage() {
     const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
     return () => unsub();
   }, [auth]);
+
+  // 안전한 날짜 포맷터
+  const human = (iso?: string) => {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '-';
+    try {
+      return d.toLocaleString();
+    } catch {
+      return '-';
+    }
+  };
+
+  const safeMs = (iso?: string) => {
+    if (!iso) return NaN;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? NaN : d.getTime();
+  };
 
   // ✅ 내가 참여한 방: 서버에서 id 목록 → rooms 문서 in 쿼리로 읽기
   useEffect(() => {
@@ -73,14 +91,14 @@ export default function HomePage() {
         const filtered = all.filter((r) => {
           if (!r) return false;
           if (!r.closed) return true;
-          const end = r.endAt ? new Date(r.endAt).getTime() : 0;
-          return end > 0 && now < end + 24 * 60 * 60 * 1000;
+          const end = safeMs(r.endAt);
+          return Number.isFinite(end) && now < end + 24 * 60 * 60 * 1000;
         });
 
         // 4) 최신 시작시간 순
         filtered.sort((a, b) => {
-          const ta = a.startAt ? new Date(a.startAt).getTime() : 0;
-          const tb = b.startAt ? new Date(b.startAt).getTime() : 0;
+          const ta = safeMs(a.startAt) || 0;
+          const tb = safeMs(b.startAt) || 0;
           return tb - ta;
         });
 
@@ -116,7 +134,8 @@ export default function HomePage() {
   const stateLabel = (r: Room) => {
     const now = Date.now();
     if (r.closed) return '종료';
-    if (now >= new Date(r.startAt).getTime()) return '진행중';
+    const start = safeMs(r.startAt);
+    if (Number.isFinite(start) && now >= start) return '진행중';
     return '모집중';
   };
 
@@ -200,7 +219,7 @@ export default function HomePage() {
                         </span>
                       </div>
                       <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
-                        장소: {r.location} · 시간: {new Date(r.startAt).toLocaleString()} ~ {new Date(r.endAt).toLocaleString()}
+                        장소: {r.location} · 시간: {human(r.startAt)} ~ {human(r.endAt)}
                       </div>
                     </div>
                   ))}
