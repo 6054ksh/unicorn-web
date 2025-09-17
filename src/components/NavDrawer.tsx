@@ -154,7 +154,7 @@ export default function NavDrawer() {
               padding: '6px 8px 4px',
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
+              gap: 8,
               borderBottom: '1px solid #e5e7eb',
               background: 'linear-gradient(#ffffff, #f8fafc)',
             }}
@@ -167,7 +167,7 @@ export default function NavDrawer() {
                 style={{
                   width: 26, height: 26, borderRadius: 8,
                   border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer',
-                  lineHeight: 5, fontSize: 14
+                  lineHeight: 1, fontSize: 14
                 }}
               >
                 ✕
@@ -189,10 +189,14 @@ export default function NavDrawer() {
             <Item href="/room/new" label="모임 만들기" emoji="🎉" />
             <Item href="/scores" label="점수판" emoji="🏆" />
             <Item href="/feedback" label="방명록" emoji="🍀" />
-            <Item href="/feedback" label="방명록" emoji="🍀" />
-            <Item href="/feedback" label="방명록" emoji="🍀" />
-            <Item href="/feedback" label="방명록" emoji="🍀" />
-            <Item href="/feedback" label="방명록" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
+            <Item href="/feedback" label="" emoji="🍀" />
           </div>
         </aside>
       </div>
