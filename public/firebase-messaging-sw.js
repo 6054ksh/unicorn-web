@@ -2,7 +2,7 @@
 importScripts('https://www.gstatic.com/firebasejs/9.6.11/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.6.11/firebase-messaging-compat.js');
 
-// ↓ 여러분의 Firebase 웹 설정으로 교체
+// ↓ 여러분의 Firebase 웹 설정
 firebase.initializeApp({
   apiKey: "AIzaSyAcOQwF5kLxWiA3vxke8QOGYtmel9XEHqg",
   authDomain: "unicorn-2cb70.firebaseapp.com",
@@ -22,12 +22,15 @@ messaging.onBackgroundMessage((payload) => {
     tag: payload?.notification?.tag,
     renotify: true,
   };
-  self.registration.showNotification(title, options);
+  // 일부 브라우저에서 registration이 없을 수 있어 가드
+  if (self.registration && self.registration.showNotification) {
+    self.registration.showNotification(title, options);
+  }
 });
 
 // 클릭 시 이동
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification?.data?.url || '/';
+  const url = (event.notification && event.notification.data && event.notification.data.url) || '/';
   event.waitUntil(self.clients.openWindow(url));
 });
