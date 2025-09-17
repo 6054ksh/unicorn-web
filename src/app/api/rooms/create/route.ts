@@ -1,3 +1,4 @@
+// src/app/api/rooms/create/route.ts
 import { NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb, getAdminMessaging } from '@/lib/firebaseAdmin';
 import * as admin from 'firebase-admin';
@@ -105,10 +106,11 @@ async function pushMulticast(
       },
       data: msg.url ? { url: msg.url } : undefined,
     });
+    success += res.successCount;
+    failure += res.failureCount;
+
     res.responses.forEach((r, idx) => {
-      if (r.success) success += 1;
-      else {
-        failure += 1;
+      if (!r.success) {
         const code = (r.error as any)?.code || '';
         if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
           bad.push(chunk[idx]);
@@ -131,6 +133,7 @@ export async function POST(req: Request) {
     if (!idToken) throw httpError('unauthorized', 401);
     const { uid } = await auth.verifyIdToken(idToken);
 
+    // 입력
     const body = await req.json();
     const title = String(body?.title || '').trim();
     const location = String(body?.location || '').trim();
@@ -201,7 +204,8 @@ export async function POST(req: Request) {
     }
 
     const nowIso = new Date().toISOString();
-    // 생성자 자동 참여
+
+    // 생성자 자동 참여 + 방 저장
     const data = {
       title,
       titleLower: title.toLowerCase(),
@@ -238,7 +242,7 @@ export async function POST(req: Request) {
         { merge: true }
       );
 
-    // --- 글로벌 알림(벨 패널용) 기존 기능 유지 ---
+    // --- 글로벌 알림(벨 패널) ---
     await pushGlobal({
       type: 'room-created',
       title: '새로운 모임이 추가되었습니다! 🎉',
@@ -246,64 +250,111 @@ export async function POST(req: Request) {
       url: `/room/${ref.id}`,
     });
 
-    // --- ✅ 유저별 알림 + FCM (신규 추가) ---
-    // 모든 사용자 대상으로 in-app 알림 & 푸시
+    // --- 전체 사용자 In-App + FCM ---
     const everyone = await db.collection('users').get();
     const allUids = everyone.docs.map(d => d.id);
+
     if (allUids.length) {
       const titleN = '새 모임이 올라왔어요 🎉';
       const bodyN = `『${title}』 — 지금 참여해보세요!`;
-      const url = `/room/${ref.id}`;
+      const urlPath = `/room/${ref.id}`;
 
-      // in-app 알림(신/구 경로 동시 기록)
+      // In-app 알림(신/구 경로 동시 기록)
       await addUserNotifications(db, allUids, {
         type: 'room-created',
         title: titleN,
         body: bodyN,
-        url,
+        url: urlPath,
         meta: { roomId: ref.id }
       });
 
       // 푸시
       const { tokens, owners } = await fetchTokensForUsers(db, allUids);
-      const res = await pushMulticast(getAdminMessaging(), tokens, {
+      const res = await pushMulticast(messaging, tokens, {
         title: titleN,
         body: bodyN,
-        url,
+        url: urlPath,
         tag: 'room-created'
       });
       if (res.badTokens.length) await removeBadTokens(db, res.badTokens, owners);
     }
 
-    // --- ✅ 카카오 채널(오픈빌더) room_created 이벤트 브로드캐스트 ---
+    // --- Kakao 채널(오픈빌더) room_created 이벤트 ---
     try {
-      // kakaoAppUserId 를 가진 유저 대상으로만 발송
+      // kakaoAppUserId가 저장된 유저만 대상
       const kakaoUsersSnap = await db.collection('users')
         .where('kakaoAppUserId', '>', '')
         .get();
 
-      const targets: KakaoEventUser[] = kakaoUsersSnap.docs
+      const kakaoTargets: KakaoEventUser[] = kakaoUsersSnap.docs
         .map(d => String((d.data() as any).kakaoAppUserId || ''))
         .filter(Boolean)
         .map(id => ({ idType: 'appUserId', id }));
 
-      if (targets.length) {
+      if (kakaoTargets.length) {
         const startAtKST = new Intl.DateTimeFormat('ko-KR', {
           dateStyle: 'medium',
           timeStyle: 'short',
           timeZone: 'Asia/Seoul'
         }).format(startAt);
 
-        const base = (process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
-        await callKakaoChannelAPI('room_created', targets, {
+        const base =
+          (process.env.NEXT_PUBLIC_BASE_URL && process.env.NEXT_PUBLIC_BASE_URL.replace(/\/+$/, '')) ||
+          (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
+
+        await callKakaoChannelAPI('room_created', kakaoTargets, {
           title,
           location,
           startAtKST,
-          url: `${base}/room/${ref.id}`,
+          url: base ? `${base}/room/${ref.id}` : `/room/${ref.id}`,
+          roomId: ref.id,
         });
       }
     } catch (err) {
       console.error('Kakao room_created event send failed:', err);
+    }
+
+    // --- 익명 브로드캐스트 토큰 대상 FCM ---
+    try {
+      const anonSnap = await db.collection('broadcastTokens').where('enabled', '==', true).get();
+      const anonTokens = anonSnap.docs.map(d => (d.data() as any).token).filter(Boolean);
+      if (anonTokens.length) {
+        const bad: string[] = [];
+        for (let i = 0; i < anonTokens.length; i += 500) {
+          const chunk = anonTokens.slice(i, i + 500);
+          const r = await messaging.sendEachForMulticast({
+            tokens: chunk,
+            webpush: {
+              headers: { Urgency: 'high', TTL: '120' },
+              fcmOptions: { link: `/room/${ref.id}` },
+              notification: {
+                title: '🦄 새 모임이 올라왔어요!',
+                body: `『${title}』 — ${location} / 정원 ${capacity}명`,
+                tag: 'room-created',
+                renotify: true,
+              },
+            },
+            data: { url: `/room/${ref.id}` },
+          });
+          r.responses.forEach((resp, idx) => {
+            if (!resp.success) {
+              const code = (resp.error as any)?.code || '';
+              if (code.includes('registration-token-not-registered') || code.includes('invalid-argument')) {
+                bad.push(chunk[idx]);
+              }
+            }
+          });
+        }
+
+        if (bad.length) {
+          const batch = db.batch();
+          bad.forEach(t => batch.delete(db.collection('broadcastTokens').doc(t)));
+          await batch.commit();
+        }
+      }
+    } catch (e) {
+      // 익명 발송 실패는 전체 실패로 만들지 않음
+      console.warn('broadcastTokens send failed', e);
     }
 
     return NextResponse.json({ ok: true, id: ref.id });

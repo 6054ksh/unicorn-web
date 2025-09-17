@@ -1,4 +1,3 @@
-// src/components/NavDrawer.tsx
 'use client';
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
@@ -19,14 +18,14 @@ export default function NavDrawer() {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '6px 8px',          // ⬅︎ 더 컴팩트
-        height: 34,                  // ⬅︎ 균일한 높이
+        gap: 6,
+        padding: '4px 8px',          // 더 컴팩트
+        height: 30,                  // 더 낮은 아이템 높이
         borderRadius: 8,
         textDecoration: 'none',
         color: '#111',
-        border: '1px solid transparent', // ⬅︎ 기본은 테두리 없음
-        background: 'transparent',       // ⬅︎ 기본은 투명
+        border: '1px solid transparent',
+        background: 'transparent',
         fontSize: 13,
         lineHeight: 1.2,
         transition: 'background .15s ease, border-color .15s ease, transform .08s ease',
@@ -45,8 +44,8 @@ export default function NavDrawer() {
       <span
         aria-hidden
         style={{
-          width: 22, height: 22, display: 'grid', placeItems: 'center',
-          fontSize: 14, borderRadius: 6, background: '#f3f4f6', // 작은 아이콘 배경칩
+          width: 20, height: 20, display: 'grid', placeItems: 'center',
+          fontSize: 13, borderRadius: 6, background: '#f3f4f6',
           border: '1px solid #e5e7eb'
         }}
       >
@@ -140,19 +139,19 @@ export default function NavDrawer() {
             left: 0,
             top: 0,
             bottom: 0,
-            width: 196,                         // 약간 더 슬림
+            width: 192,                         // 약간 더 슬림
             transform: open ? 'translateX(0)' : 'translateX(-100%)',
             transition: 'transform .18s ease',
             background: '#f8fafc',
             borderRight: '1px solid #e5e7eb',
             display: 'grid',
-            gridTemplateRows: 'auto 1fr',       // 헤더 고정 + 리스트 스크롤
+            gridTemplateRows: 'auto 1fr',
           }}
         >
-          {/* 헤더(상단 밀착) */}
+          {/* 헤더 */}
           <div
             style={{
-              padding: '8px 8px 6px',
+              padding: '6px 8px 4px',
               display: 'flex',
               alignItems: 'center',
               gap: 8,
@@ -166,7 +165,7 @@ export default function NavDrawer() {
                 aria-label="메뉴 닫기"
                 onClick={() => setOpen(false)}
                 style={{
-                  width: 28, height: 28, borderRadius: 8,
+                  width: 26, height: 26, borderRadius: 8,
                   border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer',
                   lineHeight: 1, fontSize: 14
                 }}
@@ -176,18 +175,18 @@ export default function NavDrawer() {
             </div>
           </div>
 
-          {/* 목록(컴팩트 & 상단 밀착, 스크롤 가능) */}
+          {/* 목록: 상단 밀착 + 아주 컴팩트 간격 */}
           <div
             style={{
-              padding: '6px',               // 최소 여백
+              padding: '4px',
               display: 'grid',
-              gap: 4,                        // 아이템 간 거리 좁게
+              gap: 2,              // ⬅︎ 공백 더 축소
               overflowY: 'auto',
             }}
           >
             <Item href="/" label="홈" emoji="🏠" />
             <Item href="/room" label="모임 목록" emoji="🗓️" />
-            <Item href="/create" label="모임 만들기" emoji="🎉" />
+            <Item href="/room/new" label="모임 만들기" emoji="🎉" />
             <Item href="/scores" label="점수판" emoji="🏆" />
             <Item href="/feedback" label="방명록" emoji="🍀" />
           </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { firebaseApp } from '@/lib/firebase';
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
@@ -9,13 +9,10 @@ import {
   collection,
   query,
   where,
-  orderBy,
-  limit as fsLimit,
-  onSnapshot,
   getDocs,
   documentId,
 } from 'firebase/firestore';
-
+import { authedFetch } from '@/lib/authedFetch';
 
 type Room = {
   id: string;
@@ -36,78 +33,84 @@ export default function HomePage() {
   const [uid, setUid] = useState<string | null>(null);
   const [myRooms, setMyRooms] = useState<Room[]>([]);
   const [users, setUsers] = useState<Record<string, UserMeta>>({});
+  const [loading, setLoading] = useState(true);
 
   const auth = useMemo(() => getAuth(firebaseApp), []);
   const db = useMemo(() => getFirestore(firebaseApp), []);
-  const unsubRef = useRef<null | (() => void)>(null);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null));
     return () => unsub();
   }, [auth]);
 
-  // 내가 참여한 방들(모집중/진행중 + 종료 24h) 여러 개
+  // ✅ 내가 참여한 방: 서버에서 id 목록 → rooms 문서 in 쿼리로 읽기
   useEffect(() => {
-    if (unsubRef.current) { unsubRef.current(); unsubRef.current = null; }
-    setMyRooms([]);
-    setUsers({});
-    if (!uid) return;
-
-    const col = collection(db, 'rooms');
-
-    const handler = async (snap: any) => {
-      const now = Date.now();
-      const rows = snap.docs.map((d: any) => ({ id: d.id, ...(d.data() as any) })) as Room[];
-
-      const list = rows.filter((r) => {
-        if (!r) return false;
-        if (!r.closed) return true; // 모집중/진행중
-        const end = new Date(r.endAt).getTime();
-        return now < end + 24 * 60 * 60 * 1000; // 종료 +24h
-      });
-
-      // 최신순
-      list.sort((a, b) => String(b.startAt).localeCompare(String(a.startAt)));
-      setMyRooms(list);
-
-      // 참가자 이름/이미지(최대 120명 정도까지 안전)
-      const ids = Array.from(new Set(list.flatMap((r) => r.participants || [])));
-      if (ids.length) {
-        const chunks: string[][] = [];
-        for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
-        const map: Record<string, UserMeta> = {};
-        for (const g of chunks) {
-          const uQ = query(collection(db, 'users'), where(documentId(), 'in', g));
-          const uS = await getDocs(uQ);
-          uS.forEach((d) => {
-            const v = d.data() as any;
-            map[d.id] = { uid: d.id, name: v?.name || '(이름없음)', profileImage: v?.profileImage || '' };
-          });
-        }
-        setUsers(map);
-      } else {
-        setUsers({});
-      }
-    };
-
-    const tryPrimary = () => {
+    let aborted = false;
+    (async () => {
+      setLoading(true);
+      setMyRooms([]);
+      setUsers({});
       try {
-        const q1 = query(col, where('participants', 'array-contains', uid), orderBy('startAt', 'desc'), fsLimit(20));
-        const unsub = onSnapshot(q1, handler, () => tryFallback());
-        unsubRef.current = unsub;
+        if (!uid) { setLoading(false); return; }
+
+        // 1) 내 방 id 목록
+        const res = await authedFetch('/api/rooms/my-ids');
+        const j = await res.json();
+        const ids: string[] = Array.isArray(j?.ids) ? j.ids : [];
+        if (!ids.length) { setLoading(false); return; }
+
+        // 2) id들로 rooms 불러오기 (10개씩)
+        const all: Room[] = [];
+        for (let i = 0; i < ids.length; i += 10) {
+          const chunk = ids.slice(i, i + 10);
+          const q = query(collection(db, 'rooms'), where(documentId(), 'in', chunk));
+          const snap = await getDocs(q);
+          snap.forEach((d) => all.push({ id: d.id, ...(d.data() as any) }));
+        }
+
+        // 3) 필터: 진행/모집중 + (종료는 24h 이내만)
+        const now = Date.now();
+        const filtered = all.filter((r) => {
+          if (!r) return false;
+          if (!r.closed) return true;
+          const end = r.endAt ? new Date(r.endAt).getTime() : 0;
+          return end > 0 && now < end + 24 * 60 * 60 * 1000;
+        });
+
+        // 4) 최신 시작시간 순
+        filtered.sort((a, b) => {
+          const ta = a.startAt ? new Date(a.startAt).getTime() : 0;
+          const tb = b.startAt ? new Date(b.startAt).getTime() : 0;
+          return tb - ta;
+        });
+
+        if (aborted) return;
+        setMyRooms(filtered);
+
+        // 5) 참여자 프로필 (최대 120명 정도까지)
+        const uids = Array.from(new Set(filtered.flatMap((r) => r.participants || [])));
+        if (uids.length) {
+          const map: Record<string, UserMeta> = {};
+          for (let i = 0; i < uids.length; i += 10) {
+            const chunk = uids.slice(i, i + 10);
+            const uq = query(collection(db, 'users'), where(documentId(), 'in', chunk));
+            const us = await getDocs(uq);
+            us.forEach((d) => {
+              const v = d.data() as any;
+              map[d.id] = { uid: d.id, name: v?.name || '(이름없음)', profileImage: v?.profileImage || '' };
+            });
+          }
+          if (!aborted) setUsers(map);
+        } else {
+          setUsers({});
+        }
       } catch {
-        tryFallback();
+        // noop
+      } finally {
+        if (!aborted) setLoading(false);
       }
-    };
-
-    const tryFallback = () => {
-      const q2 = query(col, where('participants', 'array-contains', uid), fsLimit(20));
-      const unsub = onSnapshot(q2, handler);
-      unsubRef.current = unsub;
-    };
-
-    tryPrimary();
-    return () => { if (unsubRef.current) unsubRef.current(); unsubRef.current = null; };
+    })();
+    return () => { aborted = true; };
   }, [db, uid]);
 
   const stateLabel = (r: Room) => {
@@ -117,7 +120,7 @@ export default function HomePage() {
     return '모집중';
   };
 
-  // 스타일
+  // 스타일 유틸
   const pill = (bg: string, color: string) => ({
     display: 'inline-block',
     padding: '4px 10px',
@@ -174,8 +177,10 @@ export default function HomePage() {
             </div>
 
             {uid ? (
-              myRooms.length ? (
-                <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+              loading ? (
+                <div style={{ color: '#666', fontSize: 13, marginTop: 4 }}>불러오는 중…</div>
+              ) : myRooms.length ? (
+                <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
                   {myRooms.map((r) => (
                     <div key={r.id} style={{ border: '1px solid #f0f1f5', borderRadius: 12, padding: 10 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
@@ -228,7 +233,6 @@ export default function HomePage() {
           </div>
         </div>
       </section>
-
     </main>
   );
 }

@@ -1,40 +1,30 @@
-// src/lib/fcm.ts
-'use client';
-
-import { firebaseApp } from '@/lib/firebase';
+// 예: src/lib/fcm.ts (클라이언트)
+import { initializeApp } from 'firebase/app';
 import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
 
-export async function requestAndGetFcmToken(): Promise<string | null> {
-  if (typeof window === 'undefined') return null;
+const app = initializeApp({ /* same config as above */ });
+
+export async function ensureFcmToken(): Promise<string | null> {
   if (!(await isSupported())) return null;
 
-  // 서비스워커 등록
-  const reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
+  const sw = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+  const messaging = getMessaging(app);
 
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
-  if (!vapidKey) {
-    console.warn('Missing NEXT_PUBLIC_FIREBASE_VAPID_KEY');
-    return null;
+  // 브라우저 알림 권한 요청
+  if (Notification.permission !== 'granted') {
+    const p = await Notification.requestPermission();
+    if (p !== 'granted') return null;
   }
 
-  try {
-    const messaging = getMessaging(firebaseApp);
-    const token = await getToken(messaging, {
-      vapidKey,
-      serviceWorkerRegistration: reg,
-    });
-    return token || null;
-  } catch (e) {
-    console.error('getToken failed:', e);
-    return null;
-  }
+  // VAPID 공개키 필수 (Firebase 콘솔 설정 > Web Push 인증서)
+  const vapidKey = process.env.NEXT_PUBLIC_FCM_VAPID_KEY!;
+  const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: sw });
+  return token;
 }
 
-export function subscribeOnMessage(cb: (payload: any) => void) {
-  if (typeof window === 'undefined') return;
-  isSupported().then((ok) => {
-    if (!ok) return;
-    const messaging = getMessaging(firebaseApp);
-    onMessage(messaging, cb);
-  });
+// 포그라운드 수신(앱 열려 있을 때)
+export async function onForegroundNotification(cb: (payload: any) => void) {
+  if (!(await isSupported())) return;
+  const messaging = getMessaging(app);
+  onMessage(messaging, cb);
 }

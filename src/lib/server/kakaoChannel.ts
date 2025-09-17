@@ -3,9 +3,13 @@ import { getAdminDb } from '@/lib/firebaseAdmin';
 
 type Target = { id: string; idType: 'appUserId' | 'userPhone' }; // 실제 사양과 맞추세요.
 
+export type KakaoEventUser = {
+  idType: 'appUserId'; // 필요하면 'phone' | 'userId' 추가
+  id: string;
+};
 export async function callKakaoChannelAPI(
-  event: string,
-  targets: Target[],
+  event: 'room_created' | string,
+  targets: KakaoEventUser[],
   payload: Record<string, any>
 ) {
   const BOT_ID = process.env.KAKAO_BOT_ID!;
